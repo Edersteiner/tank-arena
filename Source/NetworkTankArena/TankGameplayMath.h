@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "TankControlIntent.h"
+#include "TankMovementCommand.h"
 
 namespace NetworkTankArena::LocalTank
 {
@@ -11,6 +12,7 @@ namespace NetworkTankArena::LocalTank
 	float NonNegativeFinite(float Value);
 	float NormalizeYaw(double Yaw);
 	FTankControlIntent SanitizeIntent(const FTankControlIntent& Intent);
+	FTankMovementCommand SanitizeMovementCommand(const FTankMovementCommand& MovementCommand);
 
 	float CalculateChassisYaw(float CurrentYaw, float Turn, float TurnRate, float DeltaTime);
 	FVector CalculateMovementDelta(float Throttle, float ForwardSpeed, float ReverseSpeed,

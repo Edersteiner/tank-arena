@@ -157,4 +157,27 @@ bool FTankTurretStateTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTankCommandTest, "NetworkTankArena.LocalTank.Command", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter);
+bool FTankCommandTest::RunTest(const FString& Parameters)
+{
+	// A valid command comes out unchanged (delta time, sequence number, intent)
+	{
+		FTankMovementCommand ingoingCommand;
+		ingoingCommand.DeltaTime = 0.00167f; // 60 FPS
+		ingoingCommand.SequenceNumber = 12; // Does not matter for this test
+		ingoingCommand.Intent = FTankControlIntent(1.0f, 1.0f, 45.f, true); 
+		
+		FTankMovementCommand outgoingCommand = SanitizeMovementCommand(ingoingCommand);
+		
+		TestTrue(TEXT("DeltaTime passes through"), FMath::IsNearlyEqual(outgoingCommand.DeltaTime,ingoingCommand.DeltaTime));
+		TestEqual(TEXT("SequenceNumber passes through"), outgoingCommand.SequenceNumber, ingoingCommand.SequenceNumber);
+		TestTrue(TEXT("AimYaw passes through"), FMath::IsNearlyEqual(outgoingCommand.Intent.AimYaw, ingoingCommand.Intent.AimYaw));
+		TestTrue(TEXT("Throttle passes through"), FMath::IsNearlyEqual(outgoingCommand.Intent.Throttle, ingoingCommand.Intent.Throttle));
+		TestTrue(TEXT("Turn passes through"), FMath::IsNearlyEqual(outgoingCommand.Intent.Turn, ingoingCommand.Intent.Turn));
+		TestEqual(TEXT("bHasAimYaw passes through"), outgoingCommand.Intent.bHasAimYaw, ingoingCommand.Intent.bHasAimYaw);
+	}
+	return true;
+}
+
 #endif

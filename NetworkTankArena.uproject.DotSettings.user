@@ -1,7 +1,12 @@
 ﻿<wpf:ResourceDictionary xml:space="preserve" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:s="clr-namespace:System;assembly=mscorlib" xmlns:ss="urn:shemas-jetbrains-com:settings-storage-xaml" xmlns:wpf="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
 	<s:String x:Key="/Default/Environment/UnitTesting/UnitTestSessionStore/Sessions/=581cf770_002Df3f9_002D4190_002D89f3_002Dc257f79d0b1d/@EntryIndexedValue">&lt;SessionState ContinuousTestingMode="0" IsActive="True" Name="Session" xmlns="urn:schemas-jetbrains-com:jetbrains-ut-session"&gt;&#xD;
-  &lt;And&gt;&#xD;
-    &lt;Namespace&gt;NetworkTankArena&lt;/Namespace&gt;&#xD;
-    &lt;Project Location="C:\Users\gabriel.eder\tank-arena\Source\NetworkTankArena" Presentation="&amp;lt;NetworkTankArena&amp;gt;\&amp;lt;Source&amp;gt;\&amp;lt;NetworkTankArena&amp;gt;" /&gt;&#xD;
-  &lt;/And&gt;&#xD;
+  &lt;Or&gt;&#xD;
+    &lt;And&gt;&#xD;
+      &lt;Namespace&gt;NetworkTankArena&lt;/Namespace&gt;&#xD;
+      &lt;Project Location="C:\Users\gabriel.eder\tank-arena\Source\NetworkTankArena" Presentation="&amp;lt;NetworkTankArena&amp;gt;\&amp;lt;Source&amp;gt;\&amp;lt;NetworkTankArena&amp;gt;" /&gt;&#xD;
+    &lt;/And&gt;&#xD;
+    &lt;TestAncestor&gt;&#xD;
+      &lt;TestId&gt;UnrealTest::9C01C704-C354-2D60-1EE9-0F8CAFB116EA::::TankCommandTest&lt;/TestId&gt;&#xD;
+    &lt;/TestAncestor&gt;&#xD;
+  &lt;/Or&gt;&#xD;
 &lt;/SessionState&gt;</s:String></wpf:ResourceDictionary>

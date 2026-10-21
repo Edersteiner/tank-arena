@@ -18,6 +18,8 @@
 #include "Misc/ConfigCacheIni.h"
 #include <limits>
 
+#include "NetworkTankArena/TankMovementCommand.h"
+
 namespace
 {
 	// Real Unreal actors/components in a transient world. No simulated transport layer.
@@ -213,5 +215,7 @@ bool FTankMultiplayerContentTest::RunTest(const FString& Parameters)
 	AddInfo(FString::Printf(TEXT("TestMap inventory: %d PlayerStarts. Two separated starts are required for manual acceptance."), Starts));
 	return true;
 }
+
+
 
 #endif

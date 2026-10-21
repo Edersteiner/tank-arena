@@ -37,6 +37,36 @@ namespace NetworkTankArena::LocalTank
 		return Result;
 	}
 
+	FTankMovementCommand SanitizeMovementCommand(const FTankMovementCommand& MovementCommand)
+	{
+		FTankMovementCommand Result;
+		
+		// Delegated to SanitizeIntent
+		Result.Intent = SanitizeIntent(MovementCommand.Intent);
+		
+		// Sequence number will be explicitly validated by the server
+		// Sanitization has no context of what a dirty or invalid
+		// sequency number is, so it's just passed through as is.
+		Result.SequenceNumber = MovementCommand.SequenceNumber;	
+	
+
+		if (!IsValidDeltaTime(MovementCommand.DeltaTime))
+		{
+			// Invalid DeltaTime is sent back as 0.0f,
+			// The server is responsible for rejecting a command with this value.
+			Result.DeltaTime = 0.0f;
+		}
+		else
+		{
+			// Clamp delta time to stop manipulated delta times with extremely high values
+			// In essence that would be speed hacks. Speed hacking is still possible by sending many commands
+			// with the max delta time but this is a start.
+			Result.DeltaTime = FMath::Min(MovementCommand.DeltaTime, 0.1f);
+		}
+		
+		return Result;
+	}
+	
 	float CalculateChassisYaw(float CurrentYaw, float Turn, float TurnRate, float DeltaTime)
 	{
 		const float InitialYaw = NormalizeYaw(CurrentYaw);

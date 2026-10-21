@@ -15,7 +15,6 @@ struct NETWORKTANKARENA_API FTankControlIntent
 	float Turn = 0.f;
 	UPROPERTY()
 	float AimYaw = 0.f;
-	// Default and cleared intents carry no aim, so they leave the turret where it is.
 	UPROPERTY()
 	bool bHasAimYaw = false;
 };
