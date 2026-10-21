@@ -52,8 +52,8 @@ bool FTankMultiplayerAuthorityTest::RunTest(const FString& Parameters)
 	FTankControlIntent Intent;
 	Intent.Throttle = 4.f;
 	Intent.Turn = std::numeric_limits<float>::infinity();
-	Intent.bHasAimWorldPoint = true;
-	Intent.AimWorldPoint = FVector(0.0, 1000.0, 100.0);
+	Intent.AimYaw = 120.f;
+	Intent.bHasAimYaw = true;
 	Controller->AcceptControlIntent(Other, Intent);
 	TestEqual(TEXT("Cannot submit for another tank"), Other->CurrentIntent.Throttle, 0.f);
 	Controller->AcceptControlIntent(nullptr, Intent);
@@ -62,12 +62,15 @@ bool FTankMultiplayerAuthorityTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Authority neutralizes non-finite turn"), Tank->CurrentIntent.Turn, 0.f);
 	Tank->Tick(0.05f);
 	TestTrue(TEXT("Server moves using existing movement component"), Tank->GetActorLocation().X > 0.0);
-	TestTrue(TEXT("Server resolves canonical turret aim"), Tank->GetCanonicalTurretWorldYaw() > 90.f);
-	Intent.AimWorldPoint.X = std::numeric_limits<double>::quiet_NaN();
+	TestTrue(TEXT("Server applies submitted turret yaw"), FMath::IsNearlyEqual(Tank->GetCanonicalTurretWorldYaw(), 120.f, 0.001f));
+	Intent.AimYaw = std::numeric_limits<float>::quiet_NaN();
 	Controller->AcceptControlIntent(Tank, Intent);
-	TestFalse(TEXT("Authority rejects non-finite aim"), Tank->CurrentIntent.bHasAimWorldPoint);
+	Tank->Tick(0.05f);
+	TestTrue(TEXT("Non-finite aim yaw keeps previous turret yaw"), FMath::IsNearlyEqual(Tank->GetCanonicalTurretWorldYaw(), 120.f, 0.001f));
 
 	Tank->ClearControlIntent();
+	Tank->Tick(0.05f);
+	TestTrue(TEXT("Cleared intent leaves turret yaw unchanged"), FMath::IsNearlyEqual(Tank->GetCanonicalTurretWorldYaw(), 120.f, 0.001f));
 	const FTransform Before = Tank->GetActorTransform();
 	const float YawBefore = Tank->GetCanonicalTurretWorldYaw();
 	Tank->SetRole(ROLE_SimulatedProxy);
@@ -90,6 +93,21 @@ bool FTankMultiplayerAuthorityTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTankMultiplayerTurretSpawnTest, "NetworkTankArena.Multiplayer.TurretSpawn",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTankMultiplayerTurretSpawnTest::RunTest(const FString& Parameters)
+{
+	FScopedTankTestWorld Scope;
+	// Away from the world origin, so aiming at the origin by accident gives a clearly different yaw.
+	ATankPawn* Tank = Scope.World->SpawnActor<ATankPawn>(FVector(1000.0, 500.0, 100.0), FRotator(0.0, 30.0, 0.0));
+	Tank->DispatchBeginPlay();
+	TestTrue(TEXT("Turret starts aligned with spawn chassis yaw"), FMath::IsNearlyEqual(Tank->GetCanonicalTurretWorldYaw(), 30.f, 0.001f));
+	Tank->Tick(0.05f);
+	TestTrue(TEXT("Turret keeps spawn yaw until aim arrives"), FMath::IsNearlyEqual(Tank->GetCanonicalTurretWorldYaw(), 30.f, 0.001f));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTankMultiplayerLifecycleTest, "NetworkTankArena.Multiplayer.Lifecycle",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -102,6 +120,8 @@ bool FTankMultiplayerLifecycleTest::RunTest(const FString& Parameters)
 	FTankControlIntent Intent;
 	Intent.Throttle = 1.f;
 	Intent.Turn = 1.f;
+	Intent.AimYaw = 45.f;
+	Intent.bHasAimYaw = true;
 	Controller->Possess(First);
 	Controller->AcceptControlIntent(First, Intent);
 	First->Tick(0.05f);
@@ -111,6 +131,7 @@ bool FTankMultiplayerLifecycleTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Missing heartbeat clears throttle"), First->CurrentIntent.Throttle, 0.f);
 	TestEqual(TEXT("Missing heartbeat clears turn"), First->CurrentIntent.Turn, 0.f);
 	TestTrue(TEXT("Expired intent cannot keep moving the tank"), First->GetActorLocation().Equals(MovingPosition));
+	TestTrue(TEXT("Expired intent keeps last turret yaw"), FMath::IsNearlyEqual(First->GetCanonicalTurretWorldYaw(), 45.f, 0.001f));
 	Controller->AcceptControlIntent(First, Intent);
 	First->Restart();
 	TestEqual(TEXT("Restart clears authoritative intent"), First->CurrentIntent.Throttle, 0.f);

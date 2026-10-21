@@ -122,6 +122,8 @@ void ATankPlayerController::PlayerTick(float DeltaTime)
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	const FViewport* Viewport = LocalPlayer && LocalPlayer->ViewportClient ? LocalPlayer->ViewportClient->Viewport : nullptr;
 	FTankControlIntent Intent;
+	// Set new intent's yaw to old one, to avoid resetting back to 0 if mouse leaves viewport
+	Intent.AimYaw = Tank->GetCanonicalTurretWorldYaw();
 	if (Viewport && Viewport->HasFocus())
 	{
 		Intent.Throttle = CachedThrottle;
@@ -130,8 +132,12 @@ void ATankPlayerController::PlayerTick(float DeltaTime)
 		FVector RayDirection;
 		if (DeprojectMousePositionToWorld(RayOrigin, RayDirection))
 		{
-			Intent.bHasAimWorldPoint = NetworkTankArena::LocalTank::TryIntersectAimPlane(
-				RayOrigin, RayDirection, Tank->GetGameplayPlaneZ(), Intent.AimWorldPoint);
+			FVector AimPoint;
+			if (NetworkTankArena::LocalTank::TryIntersectAimPlane(RayOrigin, RayDirection, Tank->GetGameplayPlaneZ(), AimPoint))
+			{
+				Intent.AimYaw = NetworkTankArena::LocalTank::ResolveTurretWorldYaw(Intent.AimYaw, Tank->GetActorLocation(), AimPoint);
+				Intent.bHasAimYaw = true;
+			}
 		}
 	}
 	else

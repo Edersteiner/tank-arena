@@ -32,11 +32,8 @@ namespace NetworkTankArena::LocalTank
 		FTankControlIntent Result;
 		Result.Throttle = SanitizeAxis(Intent.Throttle);
 		Result.Turn = SanitizeAxis(Intent.Turn);
-		Result.bHasAimWorldPoint = Intent.bHasAimWorldPoint && IsFiniteVector(Intent.AimWorldPoint);
-		if (Result.bHasAimWorldPoint)
-		{
-			Result.AimWorldPoint = Intent.AimWorldPoint;
-		}
+		Result.AimYaw = NormalizeYaw(Intent.AimYaw);
+		Result.bHasAimYaw = Intent.bHasAimYaw && FMath::IsFinite(Intent.AimYaw);
 		return Result;
 	}
 
@@ -105,14 +102,10 @@ namespace NetworkTankArena::LocalTank
 		return true;
 	}
 
-	float ResolveTurretWorldYaw(float PreviousYaw, const FVector& GameplayPosition,
-		const FTankControlIntent& Intent)
+	float ResolveTurretWorldYaw(float PreviousYaw, const FVector& GameplayPosition, const FVector& AimPoint)
 	{
 		float Result = NormalizeYaw(PreviousYaw);
-		if (Intent.bHasAimWorldPoint)
-		{
-			TryCalculateAimYaw(GameplayPosition, Intent.AimWorldPoint, Result);
-		}
+		TryCalculateAimYaw(GameplayPosition, AimPoint, Result);
 		return Result;
 	}
 

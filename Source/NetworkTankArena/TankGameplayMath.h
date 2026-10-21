@@ -19,6 +19,6 @@ namespace NetworkTankArena::LocalTank
 		double PlaneZ, FVector& OutAimPoint);
 	bool TryCalculateAimYaw(const FVector& GameplayPosition, const FVector& AimPoint, float& OutYaw);
 	float ResolveTurretWorldYaw(float PreviousYaw, const FVector& GameplayPosition,
-		const FTankControlIntent& Intent);
+		const FVector& AimPoint);
 	float CalculateRelativeTurretYaw(float ChassisYaw, float TurretWorldYaw);
 }

@@ -86,7 +86,6 @@ void ATankPawn::BeginPlay()
 	{
 		CollisionRoot->SetWorldScale3D(FVector::OneVector);
 		CollisionRoot->SetWorldRotation(FRotator(0.0, NormalizeYaw(GetActorRotation().Yaw), 0.0));
-		CanonicalTurretWorldYaw = ResolveTurretWorldYaw(GetActorRotation().Yaw, GetActorLocation(), FTankControlIntent{});
 	}
 	CollisionRoot->SetSimulatePhysics(false);
 	CollisionRoot->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
@@ -105,6 +104,9 @@ void ATankPawn::BeginPlay()
 	PreviousPresentationYaw = NormalizeYaw(GetActorRotation().Yaw);
 	UpdateControllerTickPrerequisite();
 	ApplyPresentation(0.f);
+	
+	// Set initial turret yaw after initial chassis transformation
+	CanonicalTurretWorldYaw = NormalizeYaw(GetActorRotation().Yaw);	
 }
 
 void ATankPawn::SubmitControlIntent(const FTankControlIntent& Intent)
@@ -143,10 +145,9 @@ void ATankPawn::Tick(float DeltaTime)
 			}
 		}
 		TankMovement->SimulateMovement(CurrentIntent, DeltaTime);
-		if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
+		if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime) && CurrentIntent.bHasAimYaw)
 		{
-			CanonicalTurretWorldYaw = NetworkTankArena::LocalTank::ResolveTurretWorldYaw(
-				CanonicalTurretWorldYaw, GetActorLocation(), CurrentIntent);
+			CanonicalTurretWorldYaw = CurrentIntent.AimYaw;
 		}
 	}
 	ApplyPresentation(DeltaTime);

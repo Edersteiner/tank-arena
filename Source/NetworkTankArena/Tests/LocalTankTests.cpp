@@ -15,18 +15,23 @@ bool FTankIntentTest::RunTest(const FString& Parameters)
 	const FTankControlIntent Default;
 	TestEqual(TEXT("Default throttle is neutral"), Default.Throttle, 0.f);
 	TestEqual(TEXT("Default turn is neutral"), Default.Turn, 0.f);
-	TestFalse(TEXT("Default aim is invalid"), Default.bHasAimWorldPoint);
-	TestTrue(TEXT("Default aim storage is finite and zero"), Default.AimWorldPoint.IsZero());
+	TestEqual(TEXT("Default aim yaw is zero"), Default.AimYaw, 0.f);
+	TestFalse(TEXT("Default intent carries no aim"), Default.bHasAimYaw);
 
 	FTankControlIntent Input;
 	Input.Throttle = 2.f;
 	Input.Turn = -3.f;
-	Input.AimWorldPoint = FVector(10.0, 20.0, 30.0);
-	Input.bHasAimWorldPoint = true;
+	Input.AimYaw = 135.f;
+	Input.bHasAimYaw = true;
 	FTankControlIntent Result = SanitizeIntent(Input);
 	TestEqual(TEXT("Throttle clamps independently"), Result.Throttle, 1.f);
 	TestEqual(TEXT("Turn clamps independently"), Result.Turn, -1.f);
-	TestTrue(TEXT("Valid aim is preserved"), Result.bHasAimWorldPoint && Result.AimWorldPoint.Equals(Input.AimWorldPoint));
+	TestTrue(TEXT("Valid aim yaw is preserved"), Result.bHasAimYaw && FMath::IsNearlyEqual(Result.AimYaw, 135.f, 0.001f));
+	Input.bHasAimYaw = false;
+	TestFalse(TEXT("Finite yaw does not override missing aim"), SanitizeIntent(Input).bHasAimYaw);
+	Input.bHasAimYaw = true;
+	Input.AimYaw = 270.f;
+	TestTrue(TEXT("Out-of-range aim yaw is normalized"), FMath::IsNearlyEqual(SanitizeIntent(Input).AimYaw, -90.f, 0.001f));
 	Input.Throttle = 0.8f;
 	Input.Turn = 0.9f;
 	Result = SanitizeIntent(Input);
@@ -35,17 +40,16 @@ bool FTankIntentTest::RunTest(const FString& Parameters)
 
 	Input.Throttle = std::numeric_limits<float>::quiet_NaN();
 	Input.Turn = std::numeric_limits<float>::infinity();
-	Input.AimWorldPoint.X = std::numeric_limits<double>::infinity();
+	Input.AimYaw = std::numeric_limits<float>::quiet_NaN();
 	Result = SanitizeIntent(Input);
 	TestEqual(TEXT("NaN throttle becomes zero"), Result.Throttle, 0.f);
 	TestEqual(TEXT("Infinite turn becomes zero"), Result.Turn, 0.f);
-	TestFalse(TEXT("Infinite aim is rejected"), Result.bHasAimWorldPoint);
-	TestTrue(TEXT("Rejected aim leaves finite zero storage"), Result.AimWorldPoint.IsZero());
-	Input.AimWorldPoint = FVector(0.0, std::numeric_limits<double>::quiet_NaN(), 0.0);
-	TestFalse(TEXT("NaN aim is rejected"), SanitizeIntent(Input).bHasAimWorldPoint);
-	Input.AimWorldPoint = FVector(10.0, 20.0, 30.0);
-	Input.bHasAimWorldPoint = false;
-	TestFalse(TEXT("Finite point does not override explicit invalidity"), SanitizeIntent(Input).bHasAimWorldPoint);
+	// What a non-finite yaw means for the turret is checked on the pawn; here it must just never leak through.
+	TestTrue(TEXT("NaN aim yaw never leaves sanitizing"), FMath::IsFinite(Result.AimYaw));
+	TestFalse(TEXT("NaN aim yaw is rejected"), Result.bHasAimYaw);
+	Input.AimYaw = std::numeric_limits<float>::infinity();
+	TestTrue(TEXT("Infinite aim yaw never leaves sanitizing"), FMath::IsFinite(SanitizeIntent(Input).AimYaw));
+	TestFalse(TEXT("Infinite aim yaw is rejected"), SanitizeIntent(Input).bHasAimYaw);
 	TestEqual(TEXT("Negative infinity axis becomes zero"), SanitizeAxis(-std::numeric_limits<float>::infinity()), 0.f);
 	return true;
 }
@@ -137,23 +141,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTankTurretStateTest, "NetworkTankArena.LocalTa
 bool FTankTurretStateTest::RunTest(const FString& Parameters)
 {
 	const FVector Position(100.0, 200.0, 30.0);
-	FTankControlIntent Intent;
-	float Yaw = ResolveTurretWorldYaw(275.f, Position, Intent);
-	TestTrue(TEXT("Initial yaw follows normalized spawn chassis yaw"), FMath::IsNearlyEqual(Yaw, -85.f, 0.001f));
-	Intent.bHasAimWorldPoint = true;
-	Intent.AimWorldPoint = Position + FVector(0.0, 100.0, 500.0);
-	Yaw = ResolveTurretWorldYaw(Yaw, Position, Intent);
-	TestTrue(TEXT("Valid aim updates canonical yaw"), FMath::IsNearlyEqual(Yaw, 90.f, 0.001f));
-	Intent.bHasAimWorldPoint = false;
-	Intent.AimWorldPoint = Position - FVector(100.0, 0.0, 0.0);
-	TestTrue(TEXT("Invalid aim retains canonical yaw rather than stale target"), FMath::IsNearlyEqual(ResolveTurretWorldYaw(Yaw, Position, Intent), Yaw));
-	Intent.bHasAimWorldPoint = true;
-	Intent.AimWorldPoint = Position;
-	TestTrue(TEXT("Zero-distance aim retains yaw"), FMath::IsNearlyEqual(ResolveTurretWorldYaw(Yaw, Position, Intent), Yaw));
-	Intent.AimWorldPoint = Position + FVector(0.0, 0.0, 100.0);
-	TestTrue(TEXT("Vertical-only aim retains yaw"), FMath::IsNearlyEqual(ResolveTurretWorldYaw(Yaw, Position, Intent), Yaw));
-	Intent.AimWorldPoint.X = std::numeric_limits<double>::quiet_NaN();
-	TestTrue(TEXT("Non-finite aim retains yaw"), FMath::IsNearlyEqual(ResolveTurretWorldYaw(Yaw, Position, Intent), Yaw));
+	float Yaw = ResolveTurretWorldYaw(275.f, Position, Position);
+	TestTrue(TEXT("Aim on the tank itself keeps normalized previous yaw"), FMath::IsNearlyEqual(Yaw, -85.f, 0.001f));
+	Yaw = ResolveTurretWorldYaw(Yaw, Position, Position + FVector(0.0, 100.0, 500.0));
+	TestTrue(TEXT("Valid aim point updates yaw"), FMath::IsNearlyEqual(Yaw, 90.f, 0.001f));
+	TestTrue(TEXT("Vertical-only aim retains yaw"), FMath::IsNearlyEqual(ResolveTurretWorldYaw(Yaw, Position, Position + FVector(0.0, 0.0, 100.0)), Yaw));
+	FVector NonFinite = Position;
+	NonFinite.X = std::numeric_limits<double>::quiet_NaN();
+	TestTrue(TEXT("Non-finite aim point retains yaw"), FMath::IsNearlyEqual(ResolveTurretWorldYaw(Yaw, Position, NonFinite), Yaw));
 	for (const float ChassisYaw : {0.f, 45.f, 170.f, -170.f})
 	{
 		const float VisualYaw = CalculateRelativeTurretYaw(ChassisYaw, Yaw);

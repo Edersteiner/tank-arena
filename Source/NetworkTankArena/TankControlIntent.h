@@ -14,7 +14,8 @@ struct NETWORKTANKARENA_API FTankControlIntent
 	UPROPERTY()
 	float Turn = 0.f;
 	UPROPERTY()
-	FVector AimWorldPoint = FVector::ZeroVector;
+	float AimYaw = 0.f;
+	// Default and cleared intents carry no aim, so they leave the turret where it is.
 	UPROPERTY()
-	bool bHasAimWorldPoint = false;
+	bool bHasAimYaw = false;
 };
