@@ -158,13 +158,13 @@ bool FTankTurretStateTest::RunTest(const FString& Parameters)
 }
 
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTankCommandTest, "NetworkTankArena.LocalTank.Command", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter);
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTankCommandTest, "NetworkTankArena.LocalTank.Command", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FTankCommandTest::RunTest(const FString& Parameters)
 {
 	// A valid command comes out unchanged (delta time, sequence number, intent)
 	{
 		FTankMovementCommand ingoingCommand;
-		ingoingCommand.DeltaTime = 0.00167f; // 60 FPS
+		ingoingCommand.DeltaTime = 0.0167f; // 60 FPS
 		ingoingCommand.SequenceNumber = 12; // Does not matter for this test
 		ingoingCommand.Intent = FTankControlIntent(1.0f, 1.0f, 45.f, true); 
 		
