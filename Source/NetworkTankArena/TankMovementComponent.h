@@ -17,6 +17,8 @@ public:
 	void SimulateMovement(const FTankControlIntent& Intent, float DeltaTime);
 	double GetGameplayPlaneZ() const { return GetPlaneConstraintOrigin().Z; }
 	virtual float GetMaxSpeed() const override;
+	float GetForwardSpeed() const;
+	float GetReverseSpeed() const;
 	float GetTurnRateDegreesPerSecond() const { return TurnRateDegreesPerSecond; }
 
 private:

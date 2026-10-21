@@ -32,6 +32,16 @@ float UTankMovementComponent::GetMaxSpeed() const
 	return FMath::Max(NonNegativeFinite(ForwardSpeed), NonNegativeFinite(ReverseSpeed));
 }
 
+float UTankMovementComponent::GetForwardSpeed() const
+{
+	return NetworkTankArena::LocalTank::NonNegativeFinite(ForwardSpeed);
+}
+
+float UTankMovementComponent::GetReverseSpeed() const
+{
+	return NetworkTankArena::LocalTank::NonNegativeFinite(ReverseSpeed);
+}
+
 void UTankMovementComponent::SimulateMovement(const FTankControlIntent& Intent, float DeltaTime)
 {
 	using namespace NetworkTankArena::LocalTank;
