@@ -177,6 +177,90 @@ bool FTankCommandTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Turn passes through"), FMath::IsNearlyEqual(outgoingCommand.Intent.Turn, ingoingCommand.Intent.Turn));
 		TestEqual(TEXT("bHasAimYaw passes through"), outgoingCommand.Intent.bHasAimYaw, ingoingCommand.Intent.bHasAimYaw);
 	}
+
+	// A default command is neutral and carries an invalid delta time
+	{
+		const FTankMovementCommand outgoingCommand = SanitizeMovementCommand(FTankMovementCommand{});
+
+		TestEqual(TEXT("Default DeltaTime stays zero"), outgoingCommand.DeltaTime, 0.f);
+		TestEqual(TEXT("Default SequenceNumber stays zero"), outgoingCommand.SequenceNumber, 0u);
+		TestEqual(TEXT("Default throttle stays neutral"), outgoingCommand.Intent.Throttle, 0.f);
+		TestEqual(TEXT("Default turn stays neutral"), outgoingCommand.Intent.Turn, 0.f);
+		TestFalse(TEXT("Default command carries no aim"), outgoingCommand.Intent.bHasAimYaw);
+	}
+
+	// Invalid delta times become zero so the server can reject the command
+	for (const float DeltaTime : {0.f, -0.0167f, std::numeric_limits<float>::quiet_NaN(),
+		std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()})
+	{
+		FTankMovementCommand ingoingCommand;
+		ingoingCommand.DeltaTime = DeltaTime;
+
+		TestEqual(TEXT("Invalid DeltaTime becomes zero"), SanitizeMovementCommand(ingoingCommand).DeltaTime, 0.f);
+	}
+
+	// Delta time is capped at 0.1 seconds
+	{
+		FTankMovementCommand ingoingCommand;
+
+		ingoingCommand.DeltaTime = 0.1f;
+		TestEqual(TEXT("DeltaTime at the cap passes through"), SanitizeMovementCommand(ingoingCommand).DeltaTime, 0.1f);
+		ingoingCommand.DeltaTime = 0.25f;
+		TestEqual(TEXT("DeltaTime above the cap is clamped"), SanitizeMovementCommand(ingoingCommand).DeltaTime, 0.1f);
+		ingoingCommand.DeltaTime = std::numeric_limits<float>::max();
+		TestEqual(TEXT("Huge DeltaTime is clamped"), SanitizeMovementCommand(ingoingCommand).DeltaTime, 0.1f);
+		ingoingCommand.DeltaTime = 1.e-6f;
+		// Exact compare, since TestEqual's float tolerance would also accept zero here
+		TestTrue(TEXT("Tiny positive DeltaTime passes through"), SanitizeMovementCommand(ingoingCommand).DeltaTime == 1.e-6f);
+	}
+
+	// Sequence numbers pass through untouched, including the extremes and alongside invalid fields
+	for (const uint32 SequenceNumber : {0u, 1u, MAX_uint32})
+	{
+		FTankMovementCommand ingoingCommand;
+		ingoingCommand.DeltaTime = std::numeric_limits<float>::quiet_NaN();
+		ingoingCommand.SequenceNumber = SequenceNumber;
+		ingoingCommand.Intent = FTankControlIntent(std::numeric_limits<float>::quiet_NaN(), 5.f, 0.f, true);
+
+		TestEqual(TEXT("SequenceNumber passes through"), SanitizeMovementCommand(ingoingCommand).SequenceNumber, SequenceNumber);
+	}
+
+	// The intent inside a command is sanitized like a standalone intent
+	{
+		FTankMovementCommand ingoingCommand;
+		ingoingCommand.DeltaTime = 0.0167f;
+		ingoingCommand.Intent = FTankControlIntent(5.f, -std::numeric_limits<float>::infinity(), 270.f, true);
+
+		FTankMovementCommand outgoingCommand = SanitizeMovementCommand(ingoingCommand);
+
+		TestEqual(TEXT("Throttle above range is clamped"), outgoingCommand.Intent.Throttle, 1.f);
+		TestEqual(TEXT("Infinite turn becomes zero"), outgoingCommand.Intent.Turn, 0.f);
+		TestTrue(TEXT("Out-of-range aim yaw is normalized"), FMath::IsNearlyEqual(outgoingCommand.Intent.AimYaw, -90.f, 0.001f));
+		TestTrue(TEXT("Valid aim is kept"), outgoingCommand.Intent.bHasAimYaw);
+
+		ingoingCommand.Intent = FTankControlIntent(-5.f, 0.5f, std::numeric_limits<float>::quiet_NaN(), true);
+		outgoingCommand = SanitizeMovementCommand(ingoingCommand);
+
+		TestEqual(TEXT("Throttle below range is clamped"), outgoingCommand.Intent.Throttle, -1.f);
+		TestTrue(TEXT("Analog turn passes through"), FMath::IsNearlyEqual(outgoingCommand.Intent.Turn, 0.5f));
+		TestTrue(TEXT("NaN aim yaw never leaves sanitizing"), FMath::IsFinite(outgoingCommand.Intent.AimYaw));
+		TestFalse(TEXT("NaN aim yaw is rejected"), outgoingCommand.Intent.bHasAimYaw);
+		TestTrue(TEXT("Valid DeltaTime is unaffected by a dirty intent"), FMath::IsNearlyEqual(outgoingCommand.DeltaTime, 0.0167f));
+	}
+
+	// An invalid delta time does not skip intent sanitization
+	{
+		FTankMovementCommand ingoingCommand;
+		ingoingCommand.DeltaTime = -1.f;
+		ingoingCommand.Intent = FTankControlIntent(std::numeric_limits<float>::quiet_NaN(), 3.f, 45.f, true);
+
+		const FTankMovementCommand outgoingCommand = SanitizeMovementCommand(ingoingCommand);
+
+		TestEqual(TEXT("NaN throttle becomes zero"), outgoingCommand.Intent.Throttle, 0.f);
+		TestEqual(TEXT("Turn above range is clamped"), outgoingCommand.Intent.Turn, 1.f);
+		TestTrue(TEXT("Valid aim yaw is preserved"), outgoingCommand.Intent.bHasAimYaw
+			&& FMath::IsNearlyEqual(outgoingCommand.Intent.AimYaw, 45.f, 0.001f));
+	}
 	return true;
 }
 
