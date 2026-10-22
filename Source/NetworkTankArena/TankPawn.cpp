@@ -8,6 +8,7 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "TankGameplayMath.h"
+#include "TankMovementCommand.h"
 #include "TankMovementComponent.h"
 
 ATankPawn::ATankPawn()
@@ -109,21 +110,24 @@ void ATankPawn::BeginPlay()
 	CanonicalTurretWorldYaw = NormalizeYaw(GetActorRotation().Yaw);	
 }
 
-void ATankPawn::SubmitControlIntent(const FTankControlIntent& Intent)
+void ATankPawn::ApplyMovementCommand(const FTankMovementCommand& Command)
 {
+	using namespace NetworkTankArena::LocalTank;
 	if (!HasAuthority())
 	{
 		return;
 	}
-	CurrentIntent = NetworkTankArena::LocalTank::SanitizeIntent(Intent);
-	ControlIntentAgeSeconds = 0.f;
-}
-
-void ATankPawn::ClearControlIntent()
-{
-	CurrentIntent = FTankControlIntent{};
-	ControlIntentAgeSeconds = 0.f;
-	TankMovement->Velocity = FVector::ZeroVector;
+	// Sanitized again at the authority boundary.
+	const FTankMovementCommand Sanitized = SanitizeMovementCommand(Command);
+	if (!IsValidDeltaTime(Sanitized.DeltaTime))
+	{
+		return;
+	}
+	TankMovement->SimulateMovement(Sanitized.Intent, Sanitized.DeltaTime);
+	if (Sanitized.Intent.bHasAimYaw)
+	{
+		CanonicalTurretWorldYaw = Sanitized.Intent.AimYaw;
+	}
 }
 
 double ATankPawn::GetGameplayPlaneZ() const
@@ -134,22 +138,7 @@ double ATankPawn::GetGameplayPlaneZ() const
 void ATankPawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-	if (HasAuthority())
-	{
-		if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
-		{
-			ControlIntentAgeSeconds += DeltaTime;
-			if (ControlIntentAgeSeconds >= ControlIntentTimeoutSeconds)
-			{
-				ClearControlIntent();
-			}
-		}
-		TankMovement->SimulateMovement(CurrentIntent, DeltaTime);
-		if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime) && CurrentIntent.bHasAimYaw)
-		{
-			CanonicalTurretWorldYaw = CurrentIntent.AimYaw;
-		}
-	}
+	// Gameplay movement only happens per received command, never per server frame.
 	ApplyPresentation(DeltaTime);
 }
 
@@ -174,15 +163,15 @@ void ATankPawn::PossessedBy(AController* NewController)
 	// APawn normally promotes a remote player's pawn to an autonomous proxy.
 	// FRepMovement skips autonomous proxies. With no prediction, ALL client tanks
 	// must be simulated proxies, including the owned tank. Ownership still belongs
-	// to the controller; its Server RPC carries intent for its possessed pawn.
+	// to the controller, its Server RPC carries commands for its possessed pawn.
 	SetAutonomousProxy(false);
-	ClearControlIntent();
+	TankMovement->StopMovementImmediately();
 }
 
 void ATankPawn::Restart()
 {
 	Super::Restart();
-	ClearControlIntent();
+	TankMovement->StopMovementImmediately();
 	UpdateControllerTickPrerequisite();
 }
 
@@ -224,14 +213,13 @@ void ATankPawn::UpdateControllerTickPrerequisite()
 
 void ATankPawn::NotifyControllerChanged()
 {
-	ClearControlIntent();
+	TankMovement->StopMovementImmediately();
 	UpdateControllerTickPrerequisite();
 	Super::NotifyControllerChanged();
 }
 
 void ATankPawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	ClearControlIntent();
 	if (AController* Previous = TickController.Get())
 	{
 		RemoveTickPrerequisiteActor(Previous);

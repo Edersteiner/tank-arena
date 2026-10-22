@@ -2,7 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
-#include "TankControlIntent.h"
 #include "TankPawn.generated.h"
 
 class UCapsuleComponent;
@@ -11,6 +10,7 @@ class UStaticMeshComponent;
 class USpringArmComponent;
 class UCameraComponent;
 class UTankMovementComponent;
+struct FTankMovementCommand;
 
 UCLASS()
 class NETWORKTANKARENA_API ATankPawn : public APawn
@@ -26,8 +26,8 @@ public:
 	virtual void Restart() override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	void SubmitControlIntent(const FTankControlIntent& Intent);
-	void ClearControlIntent();
+	// Authority only. Advances the gameplay transform and turret by one command.
+	void ApplyMovementCommand(const FTankMovementCommand& Command);
 	double GetGameplayPlaneZ() const;
 	float GetCanonicalTurretWorldYaw() const { return CanonicalTurretWorldYaw; }
 
@@ -76,13 +76,9 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank|Presentation", meta = (ClampMin = "0"))
 	float BankInterpSpeed = 8.f;
 
-	FTankControlIntent CurrentIntent;
 	// Independent gameplay state: cosmetic component transforms are never replicated.
 	UPROPERTY(ReplicatedUsing = OnRep_CanonicalTurretWorldYaw)
 	float CanonicalTurretWorldYaw = 0.f;
-	// Intent is refreshed by producers, not replicated. Stop if unreliable updates cease.
-	static constexpr float ControlIntentTimeoutSeconds = 0.5f;
-	float ControlIntentAgeSeconds = 0.f;
 	FTransform BaseVisualTransform = FTransform::Identity;
 	FTransform BaseChassisTransform = FTransform::Identity;
 	double HoverPhase = 0.0;

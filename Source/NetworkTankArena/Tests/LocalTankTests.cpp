@@ -1,3 +1,4 @@
+#include "../TankCommandRingBuffer.h"
 #include "../TankGameplayMath.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -260,6 +261,78 @@ bool FTankCommandTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Turn above range is clamped"), outgoingCommand.Intent.Turn, 1.f);
 		TestTrue(TEXT("Valid aim yaw is preserved"), outgoingCommand.Intent.bHasAimYaw
 			&& FMath::IsNearlyEqual(outgoingCommand.Intent.AimYaw, 45.f, 0.001f));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTankCommandRingBufferTest, "NetworkTankArena.LocalTank.CommandRingBuffer", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FTankCommandRingBufferTest::RunTest(const FString& Parameters)
+{
+	const auto MakeCommand = [](uint32 SequenceNumber)
+	{
+		FTankMovementCommand Command;
+		Command.SequenceNumber = SequenceNumber;
+		Command.DeltaTime = 0.0167f;
+		return Command;
+	};
+
+	// Commands come back oldest first
+	{
+		FTankCommandRingBuffer Buffer;
+		TestTrue(TEXT("New buffer is empty"), Buffer.IsEmpty());
+		for (uint32 SequenceNumber = 1; SequenceNumber <= 3; ++SequenceNumber)
+		{
+			TestTrue(TEXT("Push with room drops nothing"), Buffer.Push(MakeCommand(SequenceNumber)));
+		}
+		TestEqual(TEXT("Every push is stored"), Buffer.Num(), 3);
+		TestTrue(TEXT("Oldest command is first"), Buffer[0].SequenceNumber == 1 && Buffer[2].SequenceNumber == 3);
+	}
+
+	// Acknowledging discards from the front up to and including the sequence number
+	{
+		FTankCommandRingBuffer Buffer;
+		for (uint32 SequenceNumber = 5; SequenceNumber <= 9; ++SequenceNumber)
+		{
+			Buffer.Push(MakeCommand(SequenceNumber));
+		}
+		TestEqual(TEXT("Sequence older than the buffer discards nothing"), Buffer.DiscardThrough(4), 0);
+		TestEqual(TEXT("Discard is inclusive"), Buffer.DiscardThrough(6), 2);
+		TestTrue(TEXT("Next unacknowledged command is now first"), Buffer.Num() == 3 && Buffer[0].SequenceNumber == 7);
+		TestEqual(TEXT("Repeated acknowledgement discards nothing"), Buffer.DiscardThrough(6), 0);
+		TestEqual(TEXT("Sequence beyond the newest discards everything"), Buffer.DiscardThrough(100), 3);
+		TestTrue(TEXT("Fully acknowledged buffer is empty"), Buffer.IsEmpty());
+	}
+
+	// A full buffer drops the oldest command and keeps order across the wrap
+	{
+		FTankCommandRingBuffer Buffer;
+		uint32 SequenceNumber = 1;
+		for (; SequenceNumber <= static_cast<uint32>(FTankCommandRingBuffer::Capacity); ++SequenceNumber)
+		{
+			Buffer.Push(MakeCommand(SequenceNumber));
+		}
+		TestTrue(TEXT("Buffer fills to capacity"), Buffer.IsFull());
+		TestFalse(TEXT("Push into a full buffer reports a drop"), Buffer.Push(MakeCommand(SequenceNumber++)));
+		TestEqual(TEXT("Full buffer stays at capacity"), Buffer.Num(), FTankCommandRingBuffer::Capacity);
+		TestEqual(TEXT("Oldest command was dropped"), Buffer[0].SequenceNumber, 2u);
+
+		for (int32 Push = 0; Push < FTankCommandRingBuffer::Capacity * 2 + 7; ++Push)
+		{
+			Buffer.Push(MakeCommand(SequenceNumber++));
+		}
+		bool bInOrder = true;
+		for (int32 Index = 1; Index < Buffer.Num(); ++Index)
+		{
+			bInOrder &= Buffer[Index].SequenceNumber == Buffer[Index - 1].SequenceNumber + 1;
+		}
+		TestTrue(TEXT("Order survives many wraps"), bInOrder);
+		TestEqual(TEXT("Newest command is last"), Buffer[Buffer.Num() - 1].SequenceNumber, SequenceNumber - 1);
+
+		TestEqual(TEXT("Discard works across the wrap"), Buffer.DiscardThrough(Buffer[9].SequenceNumber), 10);
+		Buffer.Reset();
+		TestTrue(TEXT("Reset empties the buffer"), Buffer.IsEmpty());
+		Buffer.Push(MakeCommand(SequenceNumber));
+		TestTrue(TEXT("Buffer is usable after reset"), Buffer.Num() == 1 && Buffer[0].SequenceNumber == SequenceNumber);
 	}
 	return true;
 }

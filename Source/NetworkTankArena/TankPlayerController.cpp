@@ -11,6 +11,7 @@
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "Kismet/GameplayStatics.h"
+#include "TankCommandSubsystem.h"
 #include "TankGameplayMath.h"
 #include "TankMovementComponent.h"
 #include "TankPawn.h"
@@ -90,19 +91,6 @@ void ATankPlayerController::ClearCachedInput()
 {
 	ClearThrottle();
 	ClearTurn();
-	SecondsUntilInputSend = 0.f;
-	if (ATankPawn* Tank = Cast<ATankPawn>(GetPawn()))
-	{
-		if (HasAuthority())
-		{
-			Tank->ClearControlIntent();
-		}
-		else if (IsLocalController())
-		{
-			// A lost neutral packet is repaired by the following periodic heartbeat.
-			SubmitLocalControlIntent(Tank, FTankControlIntent{});
-		}
-	}
 }
 
 void ATankPlayerController::FlushPressedKeys()
@@ -149,43 +137,18 @@ void ATankPlayerController::PlayerTick(float DeltaTime)
 	{
 		ApplyDriveMeasurement(Tank, DeltaTime, Intent);
 	}
-	if (HasAuthority())
+	if (UTankCommandSubsystem* Commands = UWorld::GetSubsystem<UTankCommandSubsystem>(GetWorld()))
 	{
-		AcceptControlIntent(Tank, Intent); // Listen host/standalone uses the same acceptance path.
-	}
-	else if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
-	{
-		SecondsUntilInputSend -= DeltaTime;
-		if (SecondsUntilInputSend <= UE_SMALL_NUMBER)
-		{
-			SubmitLocalControlIntent(Tank, Intent);
-			// No catch-up burst after a slow frame. Send full current state even when neutral.
-			SecondsUntilInputSend = InputSendIntervalSeconds;
-		}
+		Commands->RecordLocalCommand(*this, *Tank, Intent, DeltaTime);
 	}
 }
 
-void ATankPlayerController::SubmitLocalControlIntent(ATankPawn* Tank, const FTankControlIntent& Intent)
+void ATankPlayerController::ServerSubmitMovementCommands_Implementation(ATankPawn* TargetTank,
+	const TArray<FTankMovementCommand>& Commands)
 {
-	if (IsLocalController() && IsValid(Tank) && GetPawn() == Tank && Tank->GetController() == this)
+	if (UTankCommandSubsystem* CommandSubsystem = UWorld::GetSubsystem<UTankCommandSubsystem>(GetWorld()))
 	{
-		ServerSubmitControlIntent(Tank, NetworkTankArena::LocalTank::SanitizeIntent(Intent));
-	}
-}
-
-void ATankPlayerController::ServerSubmitControlIntent_Implementation(ATankPawn* TargetTank, FTankControlIntent Intent)
-{
-	AcceptControlIntent(TargetTank, Intent);
-}
-
-void ATankPlayerController::AcceptControlIntent(ATankPawn* TargetTank, const FTankControlIntent& Intent)
-{
-	// The RPC is routed through the owned controller. Never let its caller name another
-	// player's tank, or let an in-flight update for an old pawn affect a new possession.
-	if (HasAuthority() && IsValid(TargetTank) && TargetTank->HasAuthority()
-		&& GetPawn() == TargetTank && TargetTank->GetController() == this)
-	{
-		TargetTank->SubmitControlIntent(Intent); // Pawn sanitizes again at the authority boundary.
+		CommandSubsystem->ReceiveCommands(*this, TargetTank, Commands);
 	}
 }
 
@@ -282,7 +245,7 @@ void ATankPlayerController::ApplyDriveMeasurement(ATankPawn* Tank, float DeltaTi
 	}
 	if (Measure.Phase == EDriveMeasurePhase::Coast)
 	{
-		// Leave room for the final intents to arrive and the last movement update to come back.
+		// Leave room for the final commands to arrive and the last movement update to come back.
 		const float PingSeconds = PlayerState ? PlayerState->GetPingInMilliseconds() / 1000.f : 0.f;
 		if (Measure.PhaseSeconds >= MeasureMinCoastSeconds + 2.f * PingSeconds && Measure.StableSeconds >= MeasureStableSeconds)
 		{
@@ -377,6 +340,10 @@ void ATankPlayerController::ReportDriveMeasurement(const FString& Line) const
 void ATankPlayerController::SetPawn(APawn* InPawn)
 {
 	ClearCachedInput();
+	if (UTankCommandSubsystem* Commands = UWorld::GetSubsystem<UTankCommandSubsystem>(GetWorld()))
+	{
+		Commands->ResetLocalCommands(*this);
+	}
 	RemoveTankInputContext();
 	Super::SetPawn(InPawn);
 	ApplyTankInputContext();
@@ -429,6 +396,10 @@ void ATankPlayerController::RemoveTankInputContext()
 void ATankPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	ClearCachedInput();
+	if (UTankCommandSubsystem* Commands = UWorld::GetSubsystem<UTankCommandSubsystem>(GetWorld()))
+	{
+		Commands->RemovePlayer(*this);
+	}
 	RemoveTankInputContext();
 	Super::EndPlay(EndPlayReason);
 }

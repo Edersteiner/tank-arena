@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "TankControlIntent.h"
+#include "TankMovementCommand.h"
 #include "TankPlayerController.generated.h"
 
 class UInputAction;
@@ -44,11 +45,10 @@ private:
 	friend class FTankMultiplayerAuthorityTest;
 	friend class FTankMultiplayerLifecycleTest;
 	friend class FTankMultiplayerContentTest;
+	friend class UTankCommandSubsystem;
 
 	UFUNCTION(Server, Unreliable)
-	void ServerSubmitControlIntent(ATankPawn* TargetTank, FTankControlIntent Intent);
-	void SubmitLocalControlIntent(ATankPawn* Tank, const FTankControlIntent& Intent);
-	void AcceptControlIntent(ATankPawn* TargetTank, const FTankControlIntent& Intent);
+	void ServerSubmitMovementCommands(ATankPawn* TargetTank, const TArray<FTankMovementCommand>& Commands);
 
 	void UpdateThrottle(const FInputActionValue& Value);
 	void UpdateTurn(const FInputActionValue& Value);
@@ -90,8 +90,6 @@ private:
 
 	float CachedThrottle = 0.f;
 	float CachedTurn = 0.f;
-	static constexpr float InputSendIntervalSeconds = 1.f / 20.f;
-	float SecondsUntilInputSend = 0.f;
 	TWeakObjectPtr<UEnhancedInputLocalPlayerSubsystem> MappingSubsystem;
 	UPROPERTY(Transient)
 	TObjectPtr<UInputMappingContext> AppliedMappingContext;
