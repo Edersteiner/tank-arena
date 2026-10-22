@@ -20,6 +20,9 @@ public:
 	float GetForwardSpeed() const;
 	float GetReverseSpeed() const;
 	float GetTurnRateDegreesPerSecond() const { return TurnRateDegreesPerSecond; }
+	// Development cheat. Scales speed on this machine's copy only, so a client's prediction disagrees with the server.
+	void SetCheatSpeedMultiplier(float Multiplier);
+	float GetCheatSpeedMultiplier() const { return CheatSpeedMultiplier; }
 
 private:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank|Movement", meta = (ClampMin = "0", Units = "cm/s"))
@@ -32,4 +35,5 @@ private:
 	float TurnRateDegreesPerSecond = 120.f;
 
 	bool bGameplayPlaneInitialized = false;
+	float CheatSpeedMultiplier = 1.f;
 };

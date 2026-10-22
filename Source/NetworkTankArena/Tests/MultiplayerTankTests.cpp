@@ -59,10 +59,10 @@ bool FTankMultiplayerAuthorityTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	Tank->SetAutonomousProxy(true); // Possession must deliberately undo autonomous promotion.
+	Tank->SetAutonomousProxy(true); // Stands in for the engine's promotion, which only happens with a net driver.
 	Controller->Possess(Tank);
 	TestTrue(TEXT("Actor and movement replication enabled"), Tank->GetIsReplicated() && Tank->IsReplicatingMovement());
-	TestEqual(TEXT("Client pawn role receives ordinary FRepMovement, including owner"), Tank->GetRemoteRole(), ROLE_SimulatedProxy);
+	TestEqual(TEXT("Possession keeps the owner as an autonomous proxy"), Tank->GetRemoteRole(), ROLE_AutonomousProxy);
 
 	const FTankMovementCommand Command = MakeCommand(1, 0.05f,
 		FTankControlIntent(4.f, std::numeric_limits<float>::infinity(), 120.f, true));
@@ -103,8 +103,8 @@ bool FTankMultiplayerAuthorityTest::RunTest(const FString& Parameters)
 	Tank->ApplyMovementCommand(MakeCommand(4, 0.1f, Drive));
 	Tank->TankMovement->SimulateMovement(Drive, 0.1f);
 	Tank->Tick(0.1f);
-	TestTrue(TEXT("Client pawn/component cannot author gameplay transform"), Tank->GetActorTransform().Equals(Before));
-	TestEqual(TEXT("Client cannot author canonical turret yaw"), Tank->GetCanonicalTurretWorldYaw(), YawBefore);
+	TestTrue(TEXT("Simulated proxy pawn/component cannot author gameplay transform"), Tank->GetActorTransform().Equals(Before));
+	TestEqual(TEXT("Simulated proxy cannot author canonical turret yaw"), Tank->GetCanonicalTurretWorldYaw(), YawBefore);
 	Tank->CanonicalTurretWorldYaw = -75.f; // Exercise presentation notification, not a transport test.
 	Tank->OnRep_CanonicalTurretWorldYaw();
 	TestTrue(TEXT("Replicated yaw is applied in world space"), FMath::IsNearlyEqual(
@@ -215,14 +215,16 @@ bool FTankMultiplayerLocalCommandTest::RunTest(const FString& Parameters)
 	Commands->RecordLocalCommand(*Controller, *Tank, Forward, 0.1f);
 	TestEqual(TEXT("Invalid frame does not consume a sequence number"), Commands->GetLastProcessedSequence(*Controller), 2u);
 
-	// Without a net driver the server RPC is absorbed, so only the owning-side buffering runs.
+	// RPCs never run in this test world because its actors are not initialized for play, so only the owning side runs.
 	Controller->SetRole(ROLE_AutonomousProxy);
+	Tank->SetRole(ROLE_AutonomousProxy);
 	const FVector ClientStart = Tank->GetActorLocation();
 	for (int32 Frame = 0; Frame < 3; ++Frame)
 	{
 		Commands->RecordLocalCommand(*Controller, *Tank, Forward, 0.02f);
 	}
-	TestTrue(TEXT("Remote client does not move the tank itself"), Tank->GetActorLocation().Equals(ClientStart));
+	const FVector Predicted = ClientStart + FVector(30.0, 0.0, 0.0);
+	TestTrue(TEXT("Remote client predicts its commands"), Tank->GetActorLocation().Equals(Predicted, 0.01));
 	Unacknowledged = Commands->FindUnacknowledgedCommands(*Controller);
 	if (!TestNotNull(TEXT("Remote client keeps unacknowledged commands"), Unacknowledged))
 	{
@@ -236,19 +238,27 @@ bool FTankMultiplayerLocalCommandTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Batch resends every unacknowledged command, oldest first"), Batch.Num() == 3
 		&& Batch[0].SequenceNumber == 3 && Batch[2].SequenceNumber == 5);
 
-	// Round trip. Without a net driver the server's acknowledgement RPC runs locally.
+	// Round trip. The same tank stands in for the server's copy, which has not run these commands yet.
 	Controller->SetRole(ROLE_Authority);
+	Tank->SetRole(ROLE_Authority);
+	Tank->SetActorLocation(ClientStart);
 	Commands->ReceiveCommands(*Controller, Tank, Batch);
 	TestEqual(TEXT("Server processes the resent batch"), Commands->GetLastProcessedSequence(*Controller), 5u);
-	TestTrue(TEXT("Acknowledgement empties the buffer"), Unacknowledged->IsEmpty());
+	TestTrue(TEXT("Server ends where the client predicted"), Tank->GetActorLocation().Equals(Predicted, 0.01));
+	// The acknowledgement RPC cannot run here either, so it is delivered to the owning side by hand.
 	Controller->SetRole(ROLE_AutonomousProxy);
+	Tank->SetRole(ROLE_AutonomousProxy);
+	Commands->AcknowledgeCommands(*Controller, Tank, Commands->GetLastProcessedSequence(*Controller), Tank->GetMovementState());
+	TestTrue(TEXT("Acknowledgement empties the buffer"), Unacknowledged->IsEmpty());
+	TestTrue(TEXT("Matching acknowledgement leaves the tank where it was predicted"), Tank->GetActorLocation().Equals(Predicted, 0.01));
 
 	Commands->RecordLocalCommand(*Controller, *Tank, Forward, 0.02f);
+	const FTankMovementState AfterSix = Tank->GetMovementState();
 	Commands->RecordLocalCommand(*Controller, *Tank, Forward, 0.02f);
-	Commands->AcknowledgeCommands(*Controller, 6);
+	Commands->AcknowledgeCommands(*Controller, Tank, 6, AfterSix);
 	TestTrue(TEXT("Partial acknowledgement keeps newer commands"), Unacknowledged->Num() == 1
 		&& (*Unacknowledged)[0].SequenceNumber == 7);
-	Commands->AcknowledgeCommands(*Controller, 5);
+	Commands->AcknowledgeCommands(*Controller, Tank, 5, Tank->GetMovementState());
 	TestEqual(TEXT("Late acknowledgement discards nothing"), Unacknowledged->Num(), 1);
 
 	Commands->ResetLocalCommands(*Controller);
@@ -256,6 +266,181 @@ bool FTankMultiplayerLocalCommandTest::RunTest(const FString& Parameters)
 	Commands->RecordLocalCommand(*Controller, *Tank, Forward, 0.02f);
 	TestTrue(TEXT("Sequence numbers keep counting after a reset"), Unacknowledged->Num() == 1
 		&& (*Unacknowledged)[0].SequenceNumber == 8);
+	Controller->SetRole(ROLE_Authority);
+	Tank->SetRole(ROLE_Authority);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTankMultiplayerServerStateTest, "NetworkTankArena.Multiplayer.ServerState",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTankMultiplayerServerStateTest::RunTest(const FString& Parameters)
+{
+	FScopedTankTestWorld Scope;
+	ATankPawn* Tank = Scope.SpawnTank(FVector(0.0, 0.0, 100.0));
+	ATankPawn* Other = Scope.SpawnTank(FVector(1000.0, 0.0, 100.0));
+	ATankPlayerController* Controller = Scope.World->SpawnActor<ATankPlayerController>();
+	UTankCommandSubsystem* Commands = Scope.World->GetSubsystem<UTankCommandSubsystem>();
+	if (!TestNotNull(TEXT("Game worlds create the command subsystem"), Commands))
+	{
+		return false;
+	}
+	Controller->Possess(Tank);
+
+	// 0.1 s of full turn is 12 degrees.
+	Commands->ReceiveCommands(*Controller, Tank, TArray<FTankMovementCommand>{MakeCommand(1, 0.1f, FTankControlIntent(1.f, 1.f, 0.f, false))});
+	const FTankMovementState State = Tank->GetMovementState();
+	TestTrue(TEXT("State carries the server location"), State.Location.Equals(Tank->GetActorLocation(), 0.001));
+	TestTrue(TEXT("State carries the chassis yaw"), FMath::IsNearlyEqual(State.ChassisYaw, 12.f, 0.001f));
+
+	// From here the tanks and controller act as the owning client's copies.
+	Tank->SetRole(ROLE_AutonomousProxy);
+	Other->SetRole(ROLE_AutonomousProxy);
+	Controller->SetRole(ROLE_AutonomousProxy);
+	Commands->RecordLocalCommand(*Controller, *Tank, FTankControlIntent{}, 0.02f);
+	const FTankCommandRingBuffer* Unacknowledged = Commands->FindUnacknowledgedCommands(*Controller);
+	if (!TestNotNull(TEXT("Owning client buffers its command"), Unacknowledged))
+	{
+		return false;
+	}
+
+	FTankMovementState ServerState;
+	ServerState.Location = FVector(300.0, 200.0, 100.0);
+	ServerState.ChassisYaw = 90.f;
+	Commands->AcknowledgeCommands(*Controller, Tank, 1, ServerState);
+	TestTrue(TEXT("Owning client snaps to the acknowledged location"), Tank->GetActorLocation().Equals(ServerState.Location, 0.001));
+	TestTrue(TEXT("Owning client snaps to the acknowledged yaw"), FMath::IsNearlyEqual(Tank->GetActorRotation().Yaw, 90.0, 0.001));
+	TestTrue(TEXT("Acknowledged command is discarded"), Unacknowledged->IsEmpty());
+
+	FTankMovementState Stale;
+	Stale.Location = FVector(0.0, 0.0, 100.0);
+	Commands->AcknowledgeCommands(*Controller, Tank, 0, Stale);
+	TestTrue(TEXT("Reordered older acknowledgement is ignored"), Tank->GetActorLocation().Equals(ServerState.Location, 0.001));
+	const FVector OtherStart = Other->GetActorLocation();
+	Commands->AcknowledgeCommands(*Controller, Other, 2, Stale);
+	TestTrue(TEXT("Acknowledgement for a tank this player does not own is not applied"), Other->GetActorLocation().Equals(OtherStart));
+	TestTrue(TEXT("Acknowledgement for another tank leaves the owned tank alone"), Tank->GetActorLocation().Equals(ServerState.Location, 0.001));
+	FTankMovementState NonFinite = ServerState;
+	NonFinite.Location.X = std::numeric_limits<double>::quiet_NaN();
+	Commands->AcknowledgeCommands(*Controller, Tank, 3, NonFinite);
+	TestTrue(TEXT("Non-finite state is never applied"), Tank->GetActorLocation().Equals(ServerState.Location, 0.001));
+
+	Tank->SetRole(ROLE_Authority);
+	Other->SetRole(ROLE_Authority);
+	Controller->SetRole(ROLE_Authority);
+	Commands->AcknowledgeCommands(*Controller, Tank, 4, Stale);
+	TestTrue(TEXT("Authority never takes a state from an acknowledgement"), Tank->GetActorLocation().Equals(ServerState.Location, 0.001));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTankMultiplayerPredictionTest, "NetworkTankArena.Multiplayer.Prediction",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTankMultiplayerPredictionTest::RunTest(const FString& Parameters)
+{
+	FScopedTankTestWorld Scope;
+	ATankPawn* Tank = Scope.SpawnTank(FVector(0.0, 0.0, 100.0));
+	ATankPlayerController* Controller = Scope.World->SpawnActor<ATankPlayerController>();
+	UTankCommandSubsystem* Commands = Scope.World->GetSubsystem<UTankCommandSubsystem>();
+	if (!TestNotNull(TEXT("Game worlds create the command subsystem"), Commands))
+	{
+		return false;
+	}
+	Controller->Possess(Tank);
+	// The tank and controller act as the owning client's copies. Server state arrives by direct acknowledgement.
+	Tank->SetRole(ROLE_AutonomousProxy);
+	Controller->SetRole(ROLE_AutonomousProxy);
+
+	// 0.1 s at full forward throttle is 50 cm per command.
+	const FTankControlIntent Forward(1.f, 0.f, 0.f, false);
+	for (int32 Frame = 0; Frame < 4; ++Frame)
+	{
+		Commands->RecordLocalCommand(*Controller, *Tank, Forward, 0.1f);
+	}
+	TestTrue(TEXT("Owning client predicts every command immediately"), Tank->GetActorLocation().Equals(FVector(200.0, 0.0, 100.0), 0.01));
+	const FTankCommandRingBuffer* Unacknowledged = Commands->FindUnacknowledgedCommands(*Controller);
+	if (!TestNotNull(TEXT("Predicted commands stay unacknowledged"), Unacknowledged))
+	{
+		return false;
+	}
+
+	FTankMovementState Agrees;
+	Agrees.Location = FVector(100.0, 0.0, 100.0);
+	Commands->AcknowledgeCommands(*Controller, Tank, 2, Agrees);
+	TestTrue(TEXT("Matching server state leaves the prediction where it was"), Tank->GetActorLocation().Equals(FVector(200.0, 0.0, 100.0), 0.01));
+	TestEqual(TEXT("Commands after the acknowledgement are kept for replay"), Unacknowledged->Num(), 2);
+
+	// The server ended command 3 somewhere else, for example after hitting something the client did not see.
+	FTankMovementState Disagrees;
+	Disagrees.Location = FVector(120.0, 0.0, 100.0);
+	Disagrees.ChassisYaw = 90.f;
+	Commands->AcknowledgeCommands(*Controller, Tank, 3, Disagrees);
+	TestTrue(TEXT("Correction replays the unacknowledged command from the server state"),
+		Tank->GetActorLocation().Equals(FVector(120.0, 50.0, 100.0), 0.01));
+	TestTrue(TEXT("Replay continues from the server yaw"), FMath::IsNearlyEqual(Tank->GetActorRotation().Yaw, 90.0, 0.001));
+
+	Commands->RecordLocalCommand(*Controller, *Tank, FTankControlIntent(0.f, 0.f, 45.f, true), 0.1f);
+	TestTrue(TEXT("Owning client applies its aim immediately"), FMath::IsNearlyEqual(Tank->GetCanonicalTurretWorldYaw(), 45.f, 0.001f));
+
+	const FVector BeforeRejected = Tank->GetActorLocation();
+	FTankMovementState NonFinite = Disagrees;
+	NonFinite.ChassisYaw = std::numeric_limits<float>::quiet_NaN();
+	Commands->RecordLocalCommand(*Controller, *Tank, FTankControlIntent{}, 0.1f);
+	Commands->AcknowledgeCommands(*Controller, Tank, 5, NonFinite);
+	TestTrue(TEXT("Rejected state does not replay commands"), Tank->GetActorLocation().Equals(BeforeRejected, 0.01));
+
+	Tank->SetRole(ROLE_SimulatedProxy);
+	const FVector BeforeSimulated = Tank->GetActorLocation();
+	Commands->RecordLocalCommand(*Controller, *Tank, Forward, 0.1f);
+	TestTrue(TEXT("Simulated proxies never predict"), Tank->GetActorLocation().Equals(BeforeSimulated));
+	Tank->SetRole(ROLE_Authority);
+	Controller->SetRole(ROLE_Authority);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTankMultiplayerCheatCorrectionTest, "NetworkTankArena.Multiplayer.CheatCorrection",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTankMultiplayerCheatCorrectionTest::RunTest(const FString& Parameters)
+{
+	FScopedTankTestWorld Scope;
+	ATankPawn* Tank = Scope.SpawnTank(FVector(0.0, 0.0, 100.0));
+	ATankPlayerController* Controller = Scope.World->SpawnActor<ATankPlayerController>();
+	UTankCommandSubsystem* Commands = Scope.World->GetSubsystem<UTankCommandSubsystem>();
+	UTankMovementComponent* Movement = Cast<UTankMovementComponent>(Tank->GetMovementComponent());
+	if (!TestNotNull(TEXT("Game worlds create the command subsystem"), Commands) || !TestNotNull(TEXT("Tank has its movement component"), Movement))
+	{
+		return false;
+	}
+	Controller->Possess(Tank);
+	Tank->SetRole(ROLE_AutonomousProxy);
+	Controller->SetRole(ROLE_AutonomousProxy);
+
+	Movement->SetCheatSpeedMultiplier(std::numeric_limits<float>::quiet_NaN());
+	TestEqual(TEXT("Non-finite cheat speed falls back to normal"), Movement->GetCheatSpeedMultiplier(), 1.f);
+	Movement->SetCheatSpeedMultiplier(100.f);
+	TestEqual(TEXT("Cheat speed is capped"), Movement->GetCheatSpeedMultiplier(), 10.f);
+
+	// 0.1 s at full forward throttle is 50 cm honestly, 100 cm at double speed.
+	Movement->SetCheatSpeedMultiplier(2.f);
+	const FTankControlIntent Forward(1.f, 0.f, 0.f, false);
+	Commands->RecordLocalCommand(*Controller, *Tank, Forward, 0.1f);
+	Commands->RecordLocalCommand(*Controller, *Tank, Forward, 0.1f);
+	TestTrue(TEXT("Sped-up prediction runs ahead"), Tank->GetActorLocation().Equals(FVector(200.0, 0.0, 100.0), 0.01));
+
+	// The honest server only moved the tank 50 cm for the first command.
+	FTankMovementState ServerState;
+	ServerState.Location = FVector(50.0, 0.0, 100.0);
+	Commands->AcknowledgeCommands(*Controller, Tank, 1, ServerState);
+	TestTrue(TEXT("Correction starts from the honest server state and replays at cheat speed"),
+		Tank->GetActorLocation().Equals(FVector(150.0, 0.0, 100.0), 0.01));
+	ServerState.Location = FVector(100.0, 0.0, 100.0);
+	Commands->AcknowledgeCommands(*Controller, Tank, 2, ServerState);
+	TestTrue(TEXT("Once everything is acknowledged the cheat gained nothing"),
+		Tank->GetActorLocation().Equals(FVector(100.0, 0.0, 100.0), 0.01));
+
+	Movement->SetCheatSpeedMultiplier(1.f);
+	Tank->SetRole(ROLE_Authority);
 	Controller->SetRole(ROLE_Authority);
 	return true;
 }

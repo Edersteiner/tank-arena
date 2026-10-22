@@ -9,6 +9,7 @@
 class ATankPawn;
 class ATankPlayerController;
 struct FTankControlIntent;
+struct FTankMovementState;
 
 // Owns the numbered movement command flow for every player in this world. The owning side
 // records and sends commands until they are acknowledged. The server validates, simulates,
@@ -25,17 +26,21 @@ public:
 	static constexpr int32 MaxCommandsPerBatch = 64;
 
 	// Owning side. Turns this frame's intent into the next numbered command. A listen host
-	// simulates it immediately. A remote client resends it in every batch until it is acknowledged.
+	// simulates it as the server. A remote client predicts it on its own tank and resends it
+	// in every batch until it is acknowledged.
 	void RecordLocalCommand(ATankPlayerController& Controller, ATankPawn& Tank,
 		const FTankControlIntent& Intent, float DeltaTime);
 	// Owning side. Drops buffered commands meant for a previous pawn. Sequence numbers keep counting.
 	void ResetLocalCommands(const ATankPlayerController& Controller);
 	// Owning side. Acknowledgements are cumulative, so every command up to this sequence number is done.
-	void AcknowledgeCommands(const ATankPlayerController& Controller, uint32 LastProcessedSequence);
+	// The state is where the server's tank ended up after that command. The tank is reconciled by
+	// snapping to it and replaying the commands the server has not processed yet.
+	void AcknowledgeCommands(const ATankPlayerController& Controller, ATankPawn* Tank,
+		uint32 LastProcessedSequence, const FTankMovementState& State);
 	static void CollectBatch(const FTankCommandRingBuffer& Unacknowledged, TArray<FTankMovementCommand>& OutBatch);
 
 	// Server side. Simulates new commands in sequence order and skips duplicate, stale or invalid ones.
-	// Every accepted batch is answered with the last processed sequence number.
+	// Every accepted batch is answered with the last processed sequence number and the tank's state.
 	void ReceiveCommands(ATankPlayerController& Controller, ATankPawn* TargetTank,
 		TConstArrayView<FTankMovementCommand> Commands);
 
@@ -53,6 +58,7 @@ private:
 	struct FLocalPlayerCommands
 	{
 		uint32 NextSequenceNumber = 1;
+		uint32 LastAcknowledgedSequence = 0;
 		float SecondsUntilSend = 0.f;
 		FTankCommandRingBuffer Unacknowledged;
 	};

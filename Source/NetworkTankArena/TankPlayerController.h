@@ -4,6 +4,7 @@
 #include "GameFramework/PlayerController.h"
 #include "TankControlIntent.h"
 #include "TankMovementCommand.h"
+#include "TankMovementState.h"
 #include "TankPlayerController.generated.h"
 
 class UInputAction;
@@ -35,6 +36,20 @@ public:
 	UFUNCTION(Exec)
 	void MeasureDrive(float Seconds, int32 Runs);
 
+	// Development cheats for testing reconciliation. They only work on a remote client and only change its own side.
+	// CheatSpeed <Multiplier>: predicts with a scaled speed while sending honest commands, so the server corrects it.
+	UFUNCTION(Exec)
+	void CheatSpeed(float Multiplier);
+	// CheatTeleport <Distance>: moves the tank forward locally. The next acknowledgement pulls it back.
+	UFUNCTION(Exec)
+	void CheatTeleport(float Distance);
+	// CheatDeltaTime <Multiplier>: sends and predicts inflated command times. The server accepts them up to its
+	// 0.1 s cap, so this speed hack is never corrected.
+	UFUNCTION(Exec)
+	void CheatDeltaTime(float Multiplier);
+	UFUNCTION(Exec)
+	void CheatReset();
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void ReceivedPlayer() override;
@@ -50,7 +65,7 @@ private:
 	UFUNCTION(Server, Unreliable)
 	void ServerSubmitMovementCommands(ATankPawn* TargetTank, const TArray<FTankMovementCommand>& Commands);
 	UFUNCTION(Client, Unreliable)
-	void ClientAcknowledgeCommands(uint32 LastProcessedSequence);
+	void ClientAcknowledgeCommands(ATankPawn* Tank, uint32 LastProcessedSequence, const FTankMovementState& State);
 
 	void UpdateThrottle(const FInputActionValue& Value);
 	void UpdateTurn(const FInputActionValue& Value);
@@ -82,6 +97,10 @@ private:
 	void StopDriveMeasurement(const TCHAR* Reason);
 	void ReportDriveMeasurement(const FString& Line) const;
 	FDriveMeasurement DriveMeasurement;
+
+	ATankPawn* FindCheatTank(const TCHAR* Command) const;
+	void ReportCheat(const FString& Line) const;
+	float CheatDeltaTimeMultiplier = 1.f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank|Input")
 	TObjectPtr<UInputAction> ThrottleAction;

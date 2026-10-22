@@ -18,6 +18,7 @@
 #include "UnrealClient.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogTankMeasure, Log, All);
+DEFINE_LOG_CATEGORY_STATIC(LogTankCheat, Log, All);
 
 namespace
 {
@@ -139,7 +140,7 @@ void ATankPlayerController::PlayerTick(float DeltaTime)
 	}
 	if (UTankCommandSubsystem* Commands = UWorld::GetSubsystem<UTankCommandSubsystem>(GetWorld()))
 	{
-		Commands->RecordLocalCommand(*this, *Tank, Intent, DeltaTime);
+		Commands->RecordLocalCommand(*this, *Tank, Intent, DeltaTime * CheatDeltaTimeMultiplier);
 	}
 }
 
@@ -152,11 +153,12 @@ void ATankPlayerController::ServerSubmitMovementCommands_Implementation(ATankPaw
 	}
 }
 
-void ATankPlayerController::ClientAcknowledgeCommands_Implementation(uint32 LastProcessedSequence)
+void ATankPlayerController::ClientAcknowledgeCommands_Implementation(ATankPawn* Tank, uint32 LastProcessedSequence,
+	const FTankMovementState& State)
 {
 	if (UTankCommandSubsystem* Commands = UWorld::GetSubsystem<UTankCommandSubsystem>(GetWorld()))
 	{
-		Commands->AcknowledgeCommands(*this, LastProcessedSequence);
+		Commands->AcknowledgeCommands(*this, Tank, LastProcessedSequence, State);
 	}
 }
 
@@ -212,6 +214,75 @@ void ATankPlayerController::MeasureDrive(float Seconds, int32 Runs)
 #endif
 }
 
+ATankPawn* ATankPlayerController::FindCheatTank(const TCHAR* Command) const
+{
+	ATankPawn* Tank = Cast<ATankPawn>(GetPawn());
+	// On the host a cheat would change the server itself, so there would be nothing to correct.
+	if (GetNetMode() != NM_Client || !IsLocalController() || !IsValid(Tank))
+	{
+		ReportCheat(FString::Printf(TEXT("%s: only works on a client with a tank."), Command));
+		return nullptr;
+	}
+	return Tank;
+}
+
+void ATankPlayerController::CheatSpeed(float Multiplier)
+{
+#if !UE_BUILD_SHIPPING
+	if (ATankPawn* Tank = FindCheatTank(TEXT("CheatSpeed")))
+	{
+		UTankMovementComponent* Movement = Cast<UTankMovementComponent>(Tank->GetMovementComponent());
+		Movement->SetCheatSpeedMultiplier(Multiplier);
+		ReportCheat(FString::Printf(TEXT("CheatSpeed: predicting at %.2fx speed."), Movement->GetCheatSpeedMultiplier()));
+	}
+#endif
+}
+
+void ATankPlayerController::CheatTeleport(float Distance)
+{
+#if !UE_BUILD_SHIPPING
+	if (ATankPawn* Tank = FindCheatTank(TEXT("CheatTeleport")))
+	{
+		const float SafeDistance = FMath::IsFinite(Distance) ? FMath::Clamp(Distance, -5000.f, 5000.f) : 0.f;
+		const FVector Forward = FRotator(0.0, Tank->GetActorRotation().Yaw, 0.0).Vector();
+		Tank->SetActorLocation(Tank->GetActorLocation() + Forward * SafeDistance, false, nullptr, ETeleportType::TeleportPhysics);
+		ReportCheat(FString::Printf(TEXT("CheatTeleport: moved %.0f cm locally."), SafeDistance));
+	}
+#endif
+}
+
+void ATankPlayerController::CheatDeltaTime(float Multiplier)
+{
+#if !UE_BUILD_SHIPPING
+	if (FindCheatTank(TEXT("CheatDeltaTime")))
+	{
+		CheatDeltaTimeMultiplier = FMath::IsFinite(Multiplier) ? FMath::Clamp(Multiplier, 0.1f, 10.f) : 1.f;
+		ReportCheat(FString::Printf(TEXT("CheatDeltaTime: sending command times at %.2fx."), CheatDeltaTimeMultiplier));
+	}
+#endif
+}
+
+void ATankPlayerController::CheatReset()
+{
+#if !UE_BUILD_SHIPPING
+	CheatDeltaTimeMultiplier = 1.f;
+	if (ATankPawn* Tank = Cast<ATankPawn>(GetPawn()))
+	{
+		Cast<UTankMovementComponent>(Tank->GetMovementComponent())->SetCheatSpeedMultiplier(1.f);
+	}
+	ReportCheat(TEXT("CheatReset: all cheats off."));
+#endif
+}
+
+void ATankPlayerController::ReportCheat(const FString& Line) const
+{
+	UE_LOG(LogTankCheat, Display, TEXT("%s"), *Line);
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Orange, Line);
+	}
+}
+
 void ATankPlayerController::ApplyDriveMeasurement(ATankPawn* Tank, float DeltaTime, FTankControlIntent& Intent)
 {
 	FDriveMeasurement& Measure = DriveMeasurement;
@@ -228,7 +299,8 @@ void ATankPlayerController::ApplyDriveMeasurement(ATankPawn* Tank, float DeltaTi
 		return;
 	}
 
-	// On a client this is the replicated position, so it only settles once the server's tank has stopped.
+	// On a client this is the predicted position. The coast phase waits two pings, so every command is
+	// acknowledged and the reading has been reconciled to the server's position before a run ends.
 	const FVector Location = Tank->GetActorLocation();
 	Measure.StableSeconds = FVector::Dist2D(Location, Measure.LastLocation) <= MeasureStableToleranceCm
 		? Measure.StableSeconds + DeltaTime : 0.f;

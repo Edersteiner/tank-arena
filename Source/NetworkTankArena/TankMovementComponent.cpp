@@ -42,12 +42,18 @@ float UTankMovementComponent::GetReverseSpeed() const
 	return NetworkTankArena::LocalTank::NonNegativeFinite(ReverseSpeed);
 }
 
+void UTankMovementComponent::SetCheatSpeedMultiplier(float Multiplier)
+{
+	CheatSpeedMultiplier = FMath::IsFinite(Multiplier) ? FMath::Clamp(Multiplier, 0.f, 10.f) : 1.f;
+}
+
 void UTankMovementComponent::SimulateMovement(const FTankControlIntent& Intent, float DeltaTime)
 {
 	using namespace NetworkTankArena::LocalTank;
-	if (!IsValid(PawnOwner) || !PawnOwner->HasAuthority())
+	// Only the server and the owning client's prediction move a tank. Simulated proxies follow replication.
+	if (!IsValid(PawnOwner) || PawnOwner->GetLocalRole() < ROLE_AutonomousProxy)
 	{
-		return; // Clients consume Actor replication; they never simulate final gameplay transforms.
+		return;
 	}
 	Velocity = FVector::ZeroVector;
 	if (!IsValid(UpdatedPrimitive) || !bGameplayPlaneInitialized
@@ -71,7 +77,8 @@ void UTankMovementComponent::SimulateMovement(const FTankControlIntent& Intent, 
 	// The upright, unit-scaled capsule is yaw-invariant. A box would need rotation collision handling.
 	FHitResult Hit;
 	SafeMoveUpdatedComponent(FVector::ZeroVector, Rotation, true, Hit);
-	const FVector Delta = CalculateMovementDelta(Intent.Throttle, ForwardSpeed, ReverseSpeed,
+	const FVector Delta = CalculateMovementDelta(Intent.Throttle, ForwardSpeed * CheatSpeedMultiplier,
+		ReverseSpeed * CheatSpeedMultiplier,
 		UpdatedComponent->GetComponentRotation().Yaw, DeltaTime);
 	SafeMoveUpdatedComponent(Delta, Rotation, true, Hit);
 	if (Hit.IsValidBlockingHit())

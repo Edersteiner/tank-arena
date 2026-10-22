@@ -113,7 +113,7 @@ void ATankPawn::BeginPlay()
 void ATankPawn::ApplyMovementCommand(const FTankMovementCommand& Command)
 {
 	using namespace NetworkTankArena::LocalTank;
-	if (!HasAuthority())
+	if (GetLocalRole() < ROLE_AutonomousProxy)
 	{
 		return;
 	}
@@ -128,6 +128,25 @@ void ATankPawn::ApplyMovementCommand(const FTankMovementCommand& Command)
 	{
 		CanonicalTurretWorldYaw = Sanitized.Intent.AimYaw;
 	}
+}
+
+FTankMovementState ATankPawn::GetMovementState() const
+{
+	FTankMovementState State;
+	State.Location = GetActorLocation();
+	State.ChassisYaw = NetworkTankArena::LocalTank::NormalizeYaw(GetActorRotation().Yaw);
+	return State;
+}
+
+bool ATankPawn::ApplyServerState(const FTankMovementState& State)
+{
+	using namespace NetworkTankArena::LocalTank;
+	if (HasAuthority() || !IsFiniteVector(State.Location) || !FMath::IsFinite(State.ChassisYaw))
+	{
+		return false;
+	}
+	return SetActorLocationAndRotation(State.Location, FRotator(0.0, NormalizeYaw(State.ChassisYaw), 0.0),
+		false, nullptr, ETeleportType::TeleportPhysics);
 }
 
 double ATankPawn::GetGameplayPlaneZ() const
@@ -145,7 +164,8 @@ void ATankPawn::Tick(float DeltaTime)
 void ATankPawn::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(ATankPawn, CanonicalTurretWorldYaw);
+	// The owning client predicts its own aim.
+	DOREPLIFETIME_CONDITION(ATankPawn, CanonicalTurretWorldYaw, COND_SkipOwner);
 }
 
 void ATankPawn::OnRep_CanonicalTurretWorldYaw()
@@ -159,12 +179,9 @@ void ATankPawn::OnRep_CanonicalTurretWorldYaw()
 
 void ATankPawn::PossessedBy(AController* NewController)
 {
+	// APawn promotes a remote player's pawn to an autonomous proxy, which FRepMovement skips.
+	// The owning client positions its tank from command acknowledgements instead.
 	Super::PossessedBy(NewController);
-	// APawn normally promotes a remote player's pawn to an autonomous proxy.
-	// FRepMovement skips autonomous proxies. With no prediction, ALL client tanks
-	// must be simulated proxies, including the owned tank. Ownership still belongs
-	// to the controller, its Server RPC carries commands for its possessed pawn.
-	SetAutonomousProxy(false);
 	TankMovement->StopMovementImmediately();
 }
 

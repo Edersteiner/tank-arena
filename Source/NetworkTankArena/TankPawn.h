@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
+#include "TankMovementState.h"
 #include "TankPawn.generated.h"
 
 class UCapsuleComponent;
@@ -26,8 +27,12 @@ public:
 	virtual void Restart() override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	// Authority only. Advances the gameplay transform and turret by one command.
+	// Server, or the owning client predicting. Advances the gameplay transform and turret by one command.
 	void ApplyMovementCommand(const FTankMovementCommand& Command);
+	FTankMovementState GetMovementState() const;
+	// Owning client only. Moves the tank to the server's state from an acknowledgement.
+	// Returns false when the state was rejected and the tank did not move.
+	bool ApplyServerState(const FTankMovementState& State);
 	double GetGameplayPlaneZ() const;
 	float GetCanonicalTurretWorldYaw() const { return CanonicalTurretWorldYaw; }
 

@@ -1,8 +1,18 @@
 #include "TankCommandSubsystem.h"
 
 #include "TankGameplayMath.h"
+#include "TankMovementState.h"
 #include "TankPawn.h"
 #include "TankPlayerController.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogTankPrediction, Log, All);
+
+namespace
+{
+	// Above the 0.005 cm rounding of the acknowledged location, so only real disagreements are reported.
+	constexpr double CorrectionToleranceCm = 0.1;
+	constexpr double CorrectionToleranceDegrees = 0.1;
+}
 
 bool UTankCommandSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
 {
@@ -32,6 +42,8 @@ void UTankCommandSubsystem::RecordLocalCommand(ATankPlayerController& Controller
 		return;
 	}
 	Local.Unacknowledged.Push(Command);
+	// Predict, so the owning client sees its input now instead of a round trip later.
+	Tank.ApplyMovementCommand(Command);
 	Local.SecondsUntilSend -= Command.DeltaTime;
 	if (Local.SecondsUntilSend <= UE_SMALL_NUMBER)
 	{
@@ -72,12 +84,39 @@ void UTankCommandSubsystem::ResetLocalCommands(const ATankPlayerController& Cont
 	}
 }
 
-void UTankCommandSubsystem::AcknowledgeCommands(const ATankPlayerController& Controller, uint32 LastProcessedSequence)
+void UTankCommandSubsystem::AcknowledgeCommands(const ATankPlayerController& Controller, ATankPawn* Tank,
+	uint32 LastProcessedSequence, const FTankMovementState& State)
 {
-	if (FLocalPlayerCommands* Local = LocalPlayers.Find(&Controller))
+	FLocalPlayerCommands* Local = LocalPlayers.Find(&Controller);
+	// A reordered acknowledgement carries an older state than one already applied.
+	if (!Local || LastProcessedSequence < Local->LastAcknowledgedSequence)
 	{
-		// Late or reordered acknowledgements are older than the front and discard nothing.
-		Local->Unacknowledged.DiscardThrough(LastProcessedSequence);
+		return;
+	}
+	Local->LastAcknowledgedSequence = LastProcessedSequence;
+	Local->Unacknowledged.DiscardThrough(LastProcessedSequence);
+	// A late acknowledgement for a previous pawn must not move the new one.
+	if (!IsValid(Tank) || Controller.GetPawn() != Tank)
+	{
+		return;
+	}
+	const FVector PredictedLocation = Tank->GetActorLocation();
+	const double PredictedYaw = Tank->GetActorRotation().Yaw;
+	// Replaying on top of a rejected state would run the commands twice.
+	if (!Tank->ApplyServerState(State))
+	{
+		return;
+	}
+	for (int32 Index = 0; Index < Local->Unacknowledged.Num(); ++Index)
+	{
+		Tank->ApplyMovementCommand(Local->Unacknowledged[Index]);
+	}
+	const double CorrectionCm = FVector::Dist(PredictedLocation, Tank->GetActorLocation());
+	const double CorrectionDegrees = FMath::Abs(FMath::FindDeltaAngleDegrees(PredictedYaw, Tank->GetActorRotation().Yaw));
+	if (CorrectionCm > CorrectionToleranceCm || CorrectionDegrees > CorrectionToleranceDegrees)
+	{
+		UE_LOG(LogTankPrediction, Log, TEXT("Corrected %.2f cm, %.2f deg at sequence %u, replayed %d command(s)."),
+			CorrectionCm, CorrectionDegrees, LastProcessedSequence, Local->Unacknowledged.Num());
 	}
 }
 
@@ -112,7 +151,7 @@ void UTankCommandSubsystem::ReceiveCommands(ATankPlayerController& Controller, A
 	// A listen host's own commands never travel, so there is nothing to acknowledge.
 	if (!Controller.IsLocalController())
 	{
-		Controller.ClientAcknowledgeCommands(Server.LastProcessedSequence);
+		Controller.ClientAcknowledgeCommands(TargetTank, Server.LastProcessedSequence, TargetTank->GetMovementState());
 	}
 }
 
