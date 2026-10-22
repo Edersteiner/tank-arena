@@ -11,7 +11,8 @@ class ATankPlayerController;
 struct FTankControlIntent;
 
 // Owns the numbered movement command flow for every player in this world. The owning side
-// records and sends commands, the server validates, simulates and keeps a history of them.
+// records and sends commands until they are acknowledged. The server validates, simulates,
+// acknowledges and keeps a history of them.
 UCLASS()
 class NETWORKTANKARENA_API UTankCommandSubsystem : public UWorldSubsystem
 {
@@ -20,15 +21,21 @@ class NETWORKTANKARENA_API UTankCommandSubsystem : public UWorldSubsystem
 public:
 	// Commands are batched and sent at this rate, matching the pawn replication rate.
 	static constexpr float SendIntervalSeconds = 1.f / 20.f;
+	// Bounds the RPC size. The oldest commands go first, so a larger backlog drains over several batches.
+	static constexpr int32 MaxCommandsPerBatch = 64;
 
 	// Owning side. Turns this frame's intent into the next numbered command. A listen host
-	// simulates it immediately; a remote client buffers it until the next send.
+	// simulates it immediately. A remote client resends it in every batch until it is acknowledged.
 	void RecordLocalCommand(ATankPlayerController& Controller, ATankPawn& Tank,
 		const FTankControlIntent& Intent, float DeltaTime);
 	// Owning side. Drops buffered commands meant for a previous pawn. Sequence numbers keep counting.
 	void ResetLocalCommands(const ATankPlayerController& Controller);
+	// Owning side. Acknowledgements are cumulative, so every command up to this sequence number is done.
+	void AcknowledgeCommands(const ATankPlayerController& Controller, uint32 LastProcessedSequence);
+	static void CollectBatch(const FTankCommandRingBuffer& Unacknowledged, TArray<FTankMovementCommand>& OutBatch);
 
 	// Server side. Simulates new commands in sequence order and skips duplicate, stale or invalid ones.
+	// Every accepted batch is answered with the last processed sequence number.
 	void ReceiveCommands(ATankPlayerController& Controller, ATankPawn* TargetTank,
 		TConstArrayView<FTankMovementCommand> Commands);
 
@@ -46,7 +53,6 @@ private:
 	struct FLocalPlayerCommands
 	{
 		uint32 NextSequenceNumber = 1;
-		uint32 NextUnsentSequence = 1;
 		float SecondsUntilSend = 0.f;
 		FTankCommandRingBuffer Unacknowledged;
 	};
@@ -57,7 +63,7 @@ private:
 		FTankCommandRingBuffer History;
 	};
 
-	void SendUnsentCommands(ATankPlayerController& Controller, ATankPawn& Tank, FLocalPlayerCommands& Local);
+	void SendUnacknowledgedCommands(ATankPlayerController& Controller, ATankPawn& Tank, const FLocalPlayerCommands& Local);
 
 	TMap<TObjectKey<ATankPlayerController>, FLocalPlayerCommands> LocalPlayers;
 	TMap<TObjectKey<ATankPlayerController>, FServerPlayerCommands> ServerPlayers;

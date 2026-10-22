@@ -149,13 +149,13 @@ bool FTankMultiplayerCommandBatchTest::RunTest(const FString& Parameters)
 	}
 
 	TArray<FTankMovementCommand> Oversized;
-	for (int32 Index = 0; Index <= FTankCommandRingBuffer::Capacity; ++Index)
+	for (int32 Index = 0; Index <= UTankCommandSubsystem::MaxCommandsPerBatch; ++Index)
 	{
 		Oversized.Add(MakeCommand(7 + Index, 0.1f, Forward));
 	}
 	const FVector BeforeOversized = Tank->GetActorLocation();
 	Commands->ReceiveCommands(*Controller, Tank, Oversized);
-	TestTrue(TEXT("Batch larger than the client buffer is rejected"), Tank->GetActorLocation().Equals(BeforeOversized));
+	TestTrue(TEXT("Batch larger than the batch limit is rejected"), Tank->GetActorLocation().Equals(BeforeOversized));
 	TestEqual(TEXT("Rejected batch does not advance the sequence"), Commands->GetLastProcessedSequence(*Controller), 6u);
 
 	// Neutral commands so the history fills without driving the tank anywhere.
@@ -175,6 +175,17 @@ bool FTankMultiplayerCommandBatchTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("History is bounded by its capacity"), History->Num(), FTankCommandRingBuffer::Capacity);
 		TestEqual(TEXT("History keeps the newest command"), (*History)[History->Num() - 1].SequenceNumber, SequenceNumber - 1);
 	}
+
+	FTankCommandRingBuffer Backlog;
+	for (uint32 Backlogged = 1; Backlogged <= 100; ++Backlogged)
+	{
+		Backlog.Push(MakeCommand(Backlogged, 0.01f, FTankControlIntent{}));
+	}
+	TArray<FTankMovementCommand> Batch;
+	UTankCommandSubsystem::CollectBatch(Backlog, Batch);
+	TestEqual(TEXT("Batch is capped"), Batch.Num(), UTankCommandSubsystem::MaxCommandsPerBatch);
+	TestTrue(TEXT("Capped batch starts with the oldest unacknowledged command"), Batch.Num() > 0
+		&& Batch[0].SequenceNumber == 1 && Batch.Last().SequenceNumber == static_cast<uint32>(Batch.Num()));
 	return true;
 }
 
@@ -213,17 +224,38 @@ bool FTankMultiplayerLocalCommandTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("Remote client does not move the tank itself"), Tank->GetActorLocation().Equals(ClientStart));
 	Unacknowledged = Commands->FindUnacknowledgedCommands(*Controller);
-	if (TestNotNull(TEXT("Remote client keeps unacknowledged commands"), Unacknowledged))
+	if (!TestNotNull(TEXT("Remote client keeps unacknowledged commands"), Unacknowledged))
 	{
-		TestEqual(TEXT("Every frame is buffered"), Unacknowledged->Num(), 3);
-		TestTrue(TEXT("Buffered commands continue the sequence"), Unacknowledged->Num() == 3
-			&& (*Unacknowledged)[0].SequenceNumber == 3 && (*Unacknowledged)[2].SequenceNumber == 5);
+		return false;
 	}
-	Commands->ResetLocalCommands(*Controller);
-	TestTrue(TEXT("Reset drops buffered commands"), Unacknowledged && Unacknowledged->IsEmpty());
+	TestEqual(TEXT("Every frame is buffered"), Unacknowledged->Num(), 3);
+	TestTrue(TEXT("Buffered commands continue the sequence"), Unacknowledged->Num() == 3
+		&& (*Unacknowledged)[0].SequenceNumber == 3 && (*Unacknowledged)[2].SequenceNumber == 5);
+	TArray<FTankMovementCommand> Batch;
+	UTankCommandSubsystem::CollectBatch(*Unacknowledged, Batch);
+	TestTrue(TEXT("Batch resends every unacknowledged command, oldest first"), Batch.Num() == 3
+		&& Batch[0].SequenceNumber == 3 && Batch[2].SequenceNumber == 5);
+
+	// Round trip. Without a net driver the server's acknowledgement RPC runs locally.
+	Controller->SetRole(ROLE_Authority);
+	Commands->ReceiveCommands(*Controller, Tank, Batch);
+	TestEqual(TEXT("Server processes the resent batch"), Commands->GetLastProcessedSequence(*Controller), 5u);
+	TestTrue(TEXT("Acknowledgement empties the buffer"), Unacknowledged->IsEmpty());
+	Controller->SetRole(ROLE_AutonomousProxy);
+
 	Commands->RecordLocalCommand(*Controller, *Tank, Forward, 0.02f);
-	TestTrue(TEXT("Sequence numbers keep counting after a reset"), Unacknowledged && Unacknowledged->Num() == 1
-		&& (*Unacknowledged)[0].SequenceNumber == 6);
+	Commands->RecordLocalCommand(*Controller, *Tank, Forward, 0.02f);
+	Commands->AcknowledgeCommands(*Controller, 6);
+	TestTrue(TEXT("Partial acknowledgement keeps newer commands"), Unacknowledged->Num() == 1
+		&& (*Unacknowledged)[0].SequenceNumber == 7);
+	Commands->AcknowledgeCommands(*Controller, 5);
+	TestEqual(TEXT("Late acknowledgement discards nothing"), Unacknowledged->Num(), 1);
+
+	Commands->ResetLocalCommands(*Controller);
+	TestTrue(TEXT("Reset drops buffered commands"), Unacknowledged->IsEmpty());
+	Commands->RecordLocalCommand(*Controller, *Tank, Forward, 0.02f);
+	TestTrue(TEXT("Sequence numbers keep counting after a reset"), Unacknowledged->Num() == 1
+		&& (*Unacknowledged)[0].SequenceNumber == 8);
 	Controller->SetRole(ROLE_Authority);
 	return true;
 }

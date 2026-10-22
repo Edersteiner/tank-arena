@@ -49,6 +49,8 @@ private:
 
 	UFUNCTION(Server, Unreliable)
 	void ServerSubmitMovementCommands(ATankPawn* TargetTank, const TArray<FTankMovementCommand>& Commands);
+	UFUNCTION(Client, Unreliable)
+	void ClientAcknowledgeCommands(uint32 LastProcessedSequence);
 
 	void UpdateThrottle(const FInputActionValue& Value);
 	void UpdateTurn(const FInputActionValue& Value);

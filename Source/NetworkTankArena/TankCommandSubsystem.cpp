@@ -35,29 +35,32 @@ void UTankCommandSubsystem::RecordLocalCommand(ATankPlayerController& Controller
 	Local.SecondsUntilSend -= Command.DeltaTime;
 	if (Local.SecondsUntilSend <= UE_SMALL_NUMBER)
 	{
-		SendUnsentCommands(Controller, Tank, Local);
+		SendUnacknowledgedCommands(Controller, Tank, Local);
 		// No catch-up burst after a slow frame.
 		Local.SecondsUntilSend = SendIntervalSeconds;
 	}
 }
 
-void UTankCommandSubsystem::SendUnsentCommands(ATankPlayerController& Controller, ATankPawn& Tank,
-	FLocalPlayerCommands& Local)
+void UTankCommandSubsystem::CollectBatch(const FTankCommandRingBuffer& Unacknowledged,
+	TArray<FTankMovementCommand>& OutBatch)
+{
+	OutBatch.Reset();
+	const int32 Count = FMath::Min(Unacknowledged.Num(), MaxCommandsPerBatch);
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		OutBatch.Add(Unacknowledged[Index]);
+	}
+}
+
+void UTankCommandSubsystem::SendUnacknowledgedCommands(ATankPlayerController& Controller, ATankPawn& Tank,
+	const FLocalPlayerCommands& Local)
 {
 	TArray<FTankMovementCommand> Batch;
-	for (int32 Index = 0; Index < Local.Unacknowledged.Num(); ++Index)
+	CollectBatch(Local.Unacknowledged, Batch);
+	if (!Batch.IsEmpty())
 	{
-		if (Local.Unacknowledged[Index].SequenceNumber >= Local.NextUnsentSequence)
-		{
-			Batch.Add(Local.Unacknowledged[Index]);
-		}
+		Controller.ServerSubmitMovementCommands(&Tank, Batch);
 	}
-	if (Batch.IsEmpty())
-	{
-		return;
-	}
-	Local.NextUnsentSequence = Batch.Last().SequenceNumber + 1;
-	Controller.ServerSubmitMovementCommands(&Tank, Batch);
 }
 
 void UTankCommandSubsystem::ResetLocalCommands(const ATankPlayerController& Controller)
@@ -65,8 +68,16 @@ void UTankCommandSubsystem::ResetLocalCommands(const ATankPlayerController& Cont
 	if (FLocalPlayerCommands* Local = LocalPlayers.Find(&Controller))
 	{
 		Local->Unacknowledged.Reset();
-		Local->NextUnsentSequence = Local->NextSequenceNumber;
 		Local->SecondsUntilSend = 0.f;
+	}
+}
+
+void UTankCommandSubsystem::AcknowledgeCommands(const ATankPlayerController& Controller, uint32 LastProcessedSequence)
+{
+	if (FLocalPlayerCommands* Local = LocalPlayers.Find(&Controller))
+	{
+		// Late or reordered acknowledgements are older than the front and discard nothing.
+		Local->Unacknowledged.DiscardThrough(LastProcessedSequence);
 	}
 }
 
@@ -80,8 +91,8 @@ void UTankCommandSubsystem::ReceiveCommands(ATankPlayerController& Controller, A
 	{
 		return;
 	}
-	// An honest client can never send more than its buffer holds.
-	if (Commands.Num() > FTankCommandRingBuffer::Capacity)
+	// An honest client never sends more than one batch can hold.
+	if (Commands.Num() > MaxCommandsPerBatch)
 	{
 		return;
 	}
@@ -96,6 +107,12 @@ void UTankCommandSubsystem::ReceiveCommands(ATankPlayerController& Controller, A
 		TargetTank->ApplyMovementCommand(Command);
 		Server.History.Push(Command);
 		Server.LastProcessedSequence = Command.SequenceNumber;
+	}
+	// Also sent when nothing new was processed, which repairs a lost acknowledgement.
+	// A listen host's own commands never travel, so there is nothing to acknowledge.
+	if (!Controller.IsLocalController())
+	{
+		Controller.ClientAcknowledgeCommands(Server.LastProcessedSequence);
 	}
 }
 

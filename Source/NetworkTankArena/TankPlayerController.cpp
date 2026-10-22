@@ -152,6 +152,14 @@ void ATankPlayerController::ServerSubmitMovementCommands_Implementation(ATankPaw
 	}
 }
 
+void ATankPlayerController::ClientAcknowledgeCommands_Implementation(uint32 LastProcessedSequence)
+{
+	if (UTankCommandSubsystem* Commands = UWorld::GetSubsystem<UTankCommandSubsystem>(GetWorld()))
+	{
+		Commands->AcknowledgeCommands(*this, LastProcessedSequence);
+	}
+}
+
 void ATankPlayerController::AcknowledgePossession(APawn* P)
 {
 	ClearCachedInput();
