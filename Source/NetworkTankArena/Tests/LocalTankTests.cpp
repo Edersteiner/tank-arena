@@ -1,5 +1,6 @@
 #include "../TankCommandRingBuffer.h"
 #include "../TankGameplayMath.h"
+#include "../TankInterpolationBuffer.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -333,6 +334,84 @@ bool FTankCommandRingBufferTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Reset empties the buffer"), Buffer.IsEmpty());
 		Buffer.Push(MakeCommand(SequenceNumber));
 		TestTrue(TEXT("Buffer is usable after reset"), Buffer.Num() == 1 && Buffer[0].SequenceNumber == SequenceNumber);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTankInterpolationBufferTest, "NetworkTankArena.LocalTank.Interpolation", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FTankInterpolationBufferTest::RunTest(const FString& Parameters)
+{
+	const auto MakeSnapshot = [](double Time, double X, float ChassisYaw, float TurretYaw)
+	{
+		FTankPresentationSnapshot Snapshot;
+		Snapshot.Time = Time;
+		Snapshot.Location = FVector(X, 0.0, 100.0);
+		Snapshot.ChassisYaw = ChassisYaw;
+		Snapshot.TurretYaw = TurretYaw;
+		return Snapshot;
+	};
+	constexpr double Interval = 0.05;
+	FTankPresentationSnapshot Sampled;
+
+	// Samples between two updates are interpolated, and outside them the nearest update is held
+	{
+		FTankInterpolationBuffer Buffer;
+		TestFalse(TEXT("Empty buffer has nothing to sample"), Buffer.Sample(0.0, Sampled));
+		Buffer.Add(MakeSnapshot(1.0, 0.0, 0.f, 0.f), Interval);
+		Buffer.Add(MakeSnapshot(1.05, 50.0, 10.f, 40.f), Interval);
+		TestTrue(TEXT("Sample between updates succeeds"), Buffer.Sample(1.025, Sampled));
+		TestTrue(TEXT("Location is interpolated"), Sampled.Location.Equals(FVector(25.0, 0.0, 100.0), 0.001));
+		TestTrue(TEXT("Chassis yaw is interpolated"), FMath::IsNearlyEqual(Sampled.ChassisYaw, 5.f, 0.001f));
+		TestTrue(TEXT("Turret yaw is interpolated"), FMath::IsNearlyEqual(Sampled.TurretYaw, 20.f, 0.001f));
+		Buffer.Sample(0.5, Sampled);
+		TestTrue(TEXT("Before the oldest update the oldest is held"), Sampled.Location.Equals(FVector(0.0, 0.0, 100.0)));
+		Buffer.Sample(2.0, Sampled);
+		TestTrue(TEXT("After the newest update the newest is held"), Sampled.Location.Equals(FVector(50.0, 0.0, 100.0)));
+		Buffer.Add(MakeSnapshot(1.02, 999.0, 0.f, 0.f), Interval);
+		TestEqual(TEXT("Snapshot older than the newest is ignored"), Buffer.Num(), 2);
+	}
+
+	// Yaw takes the short way across the wrap
+	{
+		FTankInterpolationBuffer Buffer;
+		Buffer.Add(MakeSnapshot(0.0, 0.0, 170.f, -170.f), Interval);
+		Buffer.Add(MakeSnapshot(Interval, 0.0, -170.f, 170.f), Interval);
+		Buffer.Sample(Interval * 0.5, Sampled);
+		TestTrue(TEXT("Chassis yaw crosses the wrap"), FMath::Abs(FMath::FindDeltaAngleDegrees(Sampled.ChassisYaw, 180.f)) < 0.001f);
+		TestTrue(TEXT("Turret yaw crosses the wrap"), FMath::Abs(FMath::FindDeltaAngleDegrees(Sampled.TurretYaw, 180.f)) < 0.001f);
+	}
+
+	// A tank that stood still waits and then moves, instead of creeping across the whole gap
+	{
+		FTankInterpolationBuffer Buffer;
+		Buffer.Add(MakeSnapshot(0.0, 0.0, 0.f, 0.f), Interval);
+		Buffer.Add(MakeSnapshot(1.0, 50.0, 0.f, 0.f), Interval);
+		TestEqual(TEXT("Still gap adds a hold snapshot"), Buffer.Num(), 3);
+		Buffer.Sample(0.5, Sampled);
+		TestTrue(TEXT("Tank stays put during the still gap"), Sampled.Location.Equals(FVector(0.0, 0.0, 100.0)));
+		Buffer.Sample(1.0 - Interval * 0.5, Sampled);
+		TestTrue(TEXT("Tank moves over the last interval only"), Sampled.Location.Equals(FVector(25.0, 0.0, 100.0), 0.001));
+	}
+
+	// A late update from jitter is still interpolated across
+	{
+		FTankInterpolationBuffer Buffer;
+		Buffer.Add(MakeSnapshot(0.0, 0.0, 0.f, 0.f), Interval);
+		Buffer.Add(MakeSnapshot(0.12, 120.0, 0.f, 0.f), Interval);
+		TestEqual(TEXT("Jitter gap adds no hold snapshot"), Buffer.Num(), 2);
+		Buffer.Sample(0.06, Sampled);
+		TestTrue(TEXT("Jitter gap is interpolated"), Sampled.Location.Equals(FVector(60.0, 0.0, 100.0), 0.001));
+	}
+
+	// The buffer is bounded and keeps the newest snapshots
+	{
+		FTankInterpolationBuffer Buffer;
+		for (int32 Update = 0; Update < FTankInterpolationBuffer::Capacity * 3; ++Update)
+		{
+			Buffer.Add(MakeSnapshot(Update * Interval, Update, 0.f, 0.f), Interval);
+		}
+		TestEqual(TEXT("Buffer stays at capacity"), Buffer.Num(), FTankInterpolationBuffer::Capacity);
+		TestTrue(TEXT("Newest snapshot is kept"), Buffer.Newest() && FMath::IsNearlyEqual(Buffer.Newest()->Location.X, FTankInterpolationBuffer::Capacity * 3.0 - 1.0));
 	}
 	return true;
 }

@@ -4,6 +4,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/World.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Net/UnrealNetwork.h"
@@ -192,26 +193,59 @@ void ATankPawn::Restart()
 	UpdateControllerTickPrerequisite();
 }
 
+bool ATankPawn::ShouldInterpolatePresentation() const
+{
+	// Standalone has no network updates to smooth, and a dedicated server draws nothing.
+	const ENetMode NetMode = GetNetMode();
+	return NetMode != NM_Standalone && NetMode != NM_DedicatedServer && !IsLocallyControlled();
+}
+
+FTankPresentationSnapshot ATankPawn::SampleInterpolatedPresentation(const FTankPresentationSnapshot& Current)
+{
+	// A change in the gameplay state means an update arrived this frame, either replicated movement
+	// on a client or a command batch on the host.
+	const FTankPresentationSnapshot* Newest = Interpolation.Newest();
+	if (!Newest || !Newest->Location.Equals(Current.Location) || Newest->ChassisYaw != Current.ChassisYaw
+		|| Newest->TurretYaw != Current.TurretYaw)
+	{
+		Interpolation.Add(Current, PresentationUpdateIntervalSeconds);
+	}
+	FTankPresentationSnapshot Sampled = Current;
+	Interpolation.Sample(Current.Time - InterpolationDelaySeconds, Sampled);
+	return Sampled;
+}
+
 void ATankPawn::ApplyPresentation(float DeltaTime)
 {
 	using namespace NetworkTankArena::LocalTank;
+	FTankPresentationSnapshot Presented;
+	Presented.Time = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	Presented.Location = GetActorLocation();
+	Presented.ChassisYaw = NormalizeYaw(GetActorRotation().Yaw);
+	Presented.TurretYaw = CanonicalTurretWorldYaw;
+	if (ShouldInterpolatePresentation())
+	{
+		Presented = SampleInterpolatedPresentation(Presented);
+	}
 	if (IsValidDeltaTime(DeltaTime))
 	{
 		HoverPhase = FMath::Fmod(HoverPhase + 2.0 * UE_PI * NonNegativeFinite(HoverFrequencyHz) * DeltaTime, 2.0 * UE_PI);
-		// Derive local banking from observed chassis motion on every machine. No intent
-		// or cosmetic transforms need replication; stepped client motion is intentional.
+		// Derive local banking from the presented chassis motion on every machine. No intent
+		// or cosmetic transforms need replication.
 		const float TurnRate = NonNegativeFinite(TankMovement->GetTurnRateDegreesPerSecond());
 		const float ObservedTurn = TurnRate > UE_SMALL_NUMBER
-			? SanitizeAxis(FMath::FindDeltaAngleDegrees(PreviousPresentationYaw, GetActorRotation().Yaw) / (DeltaTime * TurnRate)) : 0.f;
+			? SanitizeAxis(FMath::FindDeltaAngleDegrees(PreviousPresentationYaw, Presented.ChassisYaw) / (DeltaTime * TurnRate)) : 0.f;
 		const float TargetBank = -ObservedTurn * FMath::Min(NonNegativeFinite(MaxBankDegrees), 15.f);
 		CurrentBankDegrees = FMath::FInterpTo(CurrentBankDegrees, TargetBank, DeltaTime, NonNegativeFinite(BankInterpSpeed));
-		PreviousPresentationYaw = NormalizeYaw(GetActorRotation().Yaw);
+		PreviousPresentationYaw = Presented.ChassisYaw;
 	}
-	const double Bob = FMath::Sin(HoverPhase) * NonNegativeFinite(HoverAmplitude);
-	VisualRoot->SetRelativeLocation(BaseVisualTransform.GetLocation() + FVector(0.0, 0.0, Bob));
+	// The visuals follow the presented state while the collision root stays at the gameplay state.
+	FTransform Visual = BaseVisualTransform;
+	Visual.AddToTranslation(FVector(0.0, 0.0, FMath::Sin(HoverPhase) * NonNegativeFinite(HoverAmplitude)));
+	VisualRoot->SetWorldTransform(Visual * FTransform(FRotator(0.0, Presented.ChassisYaw, 0.0), Presented.Location));
 	ChassisVisualPivot->SetRelativeRotation(BaseChassisTransform.Rotator() + FRotator(0.0, 0.0, CurrentBankDegrees));
 	TurretYawPivot->SetRelativeRotation(FRotator(0.0,
-		CalculateRelativeTurretYaw(GetActorRotation().Yaw, CanonicalTurretWorldYaw), 0.0));
+		CalculateRelativeTurretYaw(Presented.ChassisYaw, Presented.TurretYaw), 0.0));
 }
 
 void ATankPawn::UpdateControllerTickPrerequisite()

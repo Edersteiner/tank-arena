@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
+#include "TankInterpolationBuffer.h"
 #include "TankMovementState.h"
 #include "TankPawn.generated.h"
 
@@ -50,6 +51,9 @@ private:
 
 	void UpdateControllerTickPrerequisite();
 	void ApplyPresentation(float DeltaTime);
+	// Other players' tanks only update at the network rate, so they are drawn interpolated in the past.
+	bool ShouldInterpolatePresentation() const;
+	FTankPresentationSnapshot SampleInterpolatedPresentation(const FTankPresentationSnapshot& Current);
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCapsuleComponent> CollisionRoot;
@@ -90,4 +94,10 @@ private:
 	float CurrentBankDegrees = 0.f;
 	float PreviousPresentationYaw = 0.f;
 	TWeakObjectPtr<AController> TickController;
+
+	// Two update intervals, so there is almost always a newer snapshot to move towards.
+	static constexpr double InterpolationDelaySeconds = 0.1;
+	// Tanks are replicated, and remote commands arrive, at 20 Hz.
+	static constexpr double PresentationUpdateIntervalSeconds = 1.0 / 20.0;
+	FTankInterpolationBuffer Interpolation;
 };
