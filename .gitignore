@@ -3,6 +3,7 @@
 
 # IDE / editor-specific files
 .idea/
+*.DotSettings.user
 .vscode/
 *.code-workspace
 
@@ -44,6 +45,7 @@ Thumbs.db
 *.xcodeproj
 *.xcworkspace
 *.sln
+*.slnx
 *.suo
 *.opensdf
 *.sdf

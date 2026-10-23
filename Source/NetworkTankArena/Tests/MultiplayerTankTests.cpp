@@ -17,6 +17,7 @@
 #include "GameFramework/PlayerStart.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ConfigCacheIni.h"
+#include "HAL/IConsoleManager.h"
 #include <limits>
 
 namespace
@@ -517,6 +518,18 @@ bool FTankMultiplayerTimeBudgetTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("Honest client is never clamped"),
 		FMath::IsNearlyEqual(FVector::Dist(HonestStart, Tank->GetActorLocation()), 250.0, 0.1));
+
+	IConsoleVariable* Toggle = IConsoleManager::Get().FindConsoleVariable(TEXT("tank.TimeBudget"));
+	if (TestNotNull(TEXT("Time budget has a console toggle"), Toggle))
+	{
+		// 0.4 s of commands with no server time passing is far over any budget.
+		const FVector OffStart = Tank->GetActorLocation();
+		Toggle->Set(false, ECVF_SetByCode);
+		SendForward(4, 0.1f);
+		Toggle->Set(true, ECVF_SetByCode);
+		TestTrue(TEXT("Turned off, the budget never clamps"),
+			FMath::IsNearlyEqual(FVector::Dist(OffStart, Tank->GetActorLocation()), 200.0, 0.1));
+	}
 	return true;
 }
 

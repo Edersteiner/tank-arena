@@ -1,5 +1,7 @@
 #include "TankCommandSubsystem.h"
 
+#include "HAL/IConsoleManager.h"
+
 #include "TankGameplayMath.h"
 #include "TankMovementState.h"
 #include "TankPawn.h"
@@ -7,6 +9,10 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogTankPrediction, Log, All);
 DEFINE_LOG_CATEGORY_STATIC(LogTankTimeBudget, Log, All);
+
+// Development switch so the time budget can be compared on and off in one session.
+static TAutoConsoleVariable<bool> CVarTankTimeBudget(TEXT("tank.TimeBudget"), true,
+	TEXT("Limits each remote player's command time to the server time that has passed. 0 turns it off."), ECVF_Cheat);
 
 namespace
 {
@@ -156,7 +162,7 @@ void UTankCommandSubsystem::ReceiveCommands(ATankPlayerController& Controller, A
 	}
 	FServerPlayerCommands& Server = ServerPlayers.FindOrAdd(&Controller);
 	// A listen host is the server, so there is nobody to protect its time from.
-	const bool bBudgeted = !Controller.IsLocalController();
+	const bool bBudgeted = CVarTankTimeBudget.GetValueOnGameThread() && !Controller.IsLocalController();
 	double ClampedSeconds = 0.0;
 	for (const FTankMovementCommand& Incoming : Commands)
 	{

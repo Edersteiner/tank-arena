@@ -1,0 +1,25 @@
+{
+	"id": "NetworkTankArena",
+	"name": "NetworkTankArena",
+	"enabledTests": [
+		"NetworkTankArena.LocalTank.AimPlane",
+		"NetworkTankArena.LocalTank.Command",
+		"NetworkTankArena.LocalTank.CommandRingBuffer",
+		"NetworkTankArena.LocalTank.Intent",
+		"NetworkTankArena.LocalTank.Interpolation",
+		"NetworkTankArena.LocalTank.InvalidTimeAndTuning",
+		"NetworkTankArena.LocalTank.Movement",
+		"NetworkTankArena.LocalTank.TurretState",
+		"NetworkTankArena.LocalTank.TurretYaw",
+		"NetworkTankArena.Multiplayer.Authority",
+		"NetworkTankArena.Multiplayer.CheatCorrection",
+		"NetworkTankArena.Multiplayer.CommandBatches",
+		"NetworkTankArena.Multiplayer.ContentDefaults",
+		"NetworkTankArena.Multiplayer.Lifecycle",
+		"NetworkTankArena.Multiplayer.LocalCommands",
+		"NetworkTankArena.Multiplayer.Prediction",
+		"NetworkTankArena.Multiplayer.ServerState",
+		"NetworkTankArena.Multiplayer.TimeBudget",
+		"NetworkTankArena.Multiplayer.TurretSpawn"
+	]
+}
