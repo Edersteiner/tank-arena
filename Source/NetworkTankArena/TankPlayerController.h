@@ -43,8 +43,8 @@ public:
 	// CheatTeleport <Distance>: moves the tank forward locally. The next acknowledgement pulls it back.
 	UFUNCTION(Exec)
 	void CheatTeleport(float Distance);
-	// CheatDeltaTime <Multiplier>: sends and predicts inflated command times. The server accepts them up to its
-	// 0.1 s cap, so this speed hack is never corrected.
+	// CheatDeltaTime <Multiplier>: sends and predicts inflated command times. The server's time budget clamps
+	// them once the player has claimed more time than has passed, so the client is corrected.
 	UFUNCTION(Exec)
 	void CheatDeltaTime(float Multiplier);
 	UFUNCTION(Exec)

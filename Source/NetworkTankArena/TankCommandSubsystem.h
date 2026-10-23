@@ -15,11 +15,15 @@ struct FTankMovementState;
 // records and sends commands until they are acknowledged. The server validates, simulates,
 // acknowledges and keeps a history of them.
 UCLASS()
-class NETWORKTANKARENA_API UTankCommandSubsystem : public UWorldSubsystem
+class NETWORKTANKARENA_API UTankCommandSubsystem : public UTickableWorldSubsystem
 {
 	GENERATED_BODY()
 
 public:
+	// Server side. Each remote player may only spend as much command time as has passed on the server.
+	// The cap bounds how much time a player can save up, which is also the most a speed hack can gain.
+	static constexpr double MaxTimeBudgetSeconds = 0.25;
+
 	// Commands are batched and sent at this rate, matching the pawn replication rate.
 	static constexpr float SendIntervalSeconds = 1.f / 20.f;
 	// Bounds the RPC size. The oldest commands go first, so a larger backlog drains over several batches.
@@ -50,6 +54,11 @@ public:
 	const FTankCommandRingBuffer* FindCommandHistory(const ATankPlayerController& Controller) const;
 	// Zero until the first command is processed, since sequence numbers start at 1.
 	uint32 GetLastProcessedSequence(const ATankPlayerController& Controller) const;
+	double GetTimeBudget(const ATankPlayerController& Controller) const;
+
+	// Refills every remote player's time budget with the server time that has passed.
+	virtual void Tick(float DeltaTime) override;
+	virtual TStatId GetStatId() const override;
 
 protected:
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
@@ -66,6 +75,8 @@ private:
 	struct FServerPlayerCommands
 	{
 		uint32 LastProcessedSequence = 0;
+		// Starts full so the first batch after joining is never clamped.
+		double TimeBudgetSeconds = MaxTimeBudgetSeconds;
 		FTankCommandRingBuffer History;
 	};
 

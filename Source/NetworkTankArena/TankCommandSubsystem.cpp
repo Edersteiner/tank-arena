@@ -6,12 +6,31 @@
 #include "TankPlayerController.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogTankPrediction, Log, All);
+DEFINE_LOG_CATEGORY_STATIC(LogTankTimeBudget, Log, All);
 
 namespace
 {
 	// Above the 0.005 cm rounding of the acknowledged location, so only real disagreements are reported.
 	constexpr double CorrectionToleranceCm = 0.1;
 	constexpr double CorrectionToleranceDegrees = 0.1;
+}
+
+void UTankCommandSubsystem::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+	if (!NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
+	{
+		return;
+	}
+	for (TPair<TObjectKey<ATankPlayerController>, FServerPlayerCommands>& Player : ServerPlayers)
+	{
+		Player.Value.TimeBudgetSeconds = FMath::Min(Player.Value.TimeBudgetSeconds + DeltaTime, MaxTimeBudgetSeconds);
+	}
+}
+
+TStatId UTankCommandSubsystem::GetStatId() const
+{
+	RETURN_QUICK_DECLARE_CYCLE_STAT(UTankCommandSubsystem, STATGROUP_Tickables);
 }
 
 bool UTankCommandSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
@@ -136,16 +155,33 @@ void UTankCommandSubsystem::ReceiveCommands(ATankPlayerController& Controller, A
 		return;
 	}
 	FServerPlayerCommands& Server = ServerPlayers.FindOrAdd(&Controller);
+	// A listen host is the server, so there is nobody to protect its time from.
+	const bool bBudgeted = !Controller.IsLocalController();
+	double ClampedSeconds = 0.0;
 	for (const FTankMovementCommand& Incoming : Commands)
 	{
-		const FTankMovementCommand Command = NetworkTankArena::LocalTank::SanitizeMovementCommand(Incoming);
+		FTankMovementCommand Command = NetworkTankArena::LocalTank::SanitizeMovementCommand(Incoming);
 		if (Command.SequenceNumber <= Server.LastProcessedSequence || Command.DeltaTime <= 0.f)
 		{
 			continue;
 		}
+		if (bBudgeted)
+		{
+			// An over-budget command still counts as processed with the time it was given, so it is
+			// acknowledged and the client is corrected instead of resending it forever.
+			const float Allowed = static_cast<float>(FMath::Clamp<double>(Server.TimeBudgetSeconds, 0.0, Command.DeltaTime));
+			ClampedSeconds += Command.DeltaTime - Allowed;
+			Command.DeltaTime = Allowed;
+			Server.TimeBudgetSeconds -= Allowed;
+		}
 		TargetTank->ApplyMovementCommand(Command);
 		Server.History.Push(Command);
 		Server.LastProcessedSequence = Command.SequenceNumber;
+	}
+	if (ClampedSeconds > 0.0)
+	{
+		UE_LOG(LogTankTimeBudget, Log, TEXT("Clamped %.1f ms of command time over budget for %s."),
+			ClampedSeconds * 1000.0, *Controller.GetName());
 	}
 	// Also sent when nothing new was processed, which repairs a lost acknowledgement.
 	// A listen host's own commands never travel, so there is nothing to acknowledge.
@@ -177,4 +213,10 @@ uint32 UTankCommandSubsystem::GetLastProcessedSequence(const ATankPlayerControll
 {
 	const FServerPlayerCommands* Server = ServerPlayers.Find(&Controller);
 	return Server ? Server->LastProcessedSequence : 0;
+}
+
+double UTankCommandSubsystem::GetTimeBudget(const ATankPlayerController& Controller) const
+{
+	const FServerPlayerCommands* Server = ServerPlayers.Find(&Controller);
+	return Server ? Server->TimeBudgetSeconds : MaxTimeBudgetSeconds;
 }

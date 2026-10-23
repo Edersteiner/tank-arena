@@ -242,6 +242,8 @@ bool FTankMultiplayerLocalCommandTest::RunTest(const FString& Parameters)
 	Controller->SetRole(ROLE_Authority);
 	Tank->SetRole(ROLE_Authority);
 	Tank->SetActorLocation(ClientStart);
+	// The server's clock has run as long as the client's frames, which refills the time budget for them.
+	Commands->Tick(0.06f);
 	Commands->ReceiveCommands(*Controller, Tank, Batch);
 	TestEqual(TEXT("Server processes the resent batch"), Commands->GetLastProcessedSequence(*Controller), 5u);
 	TestTrue(TEXT("Server ends where the client predicted"), Tank->GetActorLocation().Equals(Predicted, 0.01));
@@ -442,6 +444,79 @@ bool FTankMultiplayerCheatCorrectionTest::RunTest(const FString& Parameters)
 	Movement->SetCheatSpeedMultiplier(1.f);
 	Tank->SetRole(ROLE_Authority);
 	Controller->SetRole(ROLE_Authority);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTankMultiplayerTimeBudgetTest, "NetworkTankArena.Multiplayer.TimeBudget",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTankMultiplayerTimeBudgetTest::RunTest(const FString& Parameters)
+{
+	FScopedTankTestWorld Scope;
+	ATankPawn* Tank = Scope.SpawnTank(FVector(0.0, 0.0, 100.0));
+	ATankPlayerController* Controller = Scope.World->SpawnActor<ATankPlayerController>();
+	UTankCommandSubsystem* Commands = Scope.World->GetSubsystem<UTankCommandSubsystem>();
+	if (!TestNotNull(TEXT("Game worlds create the command subsystem"), Commands))
+	{
+		return false;
+	}
+	Controller->Possess(Tank);
+	const FTankControlIntent Forward(1.f, 0.f, 0.f, false);
+	uint32 SequenceNumber = 1;
+	const auto SendForward = [&](int32 Count, float DeltaTime)
+	{
+		TArray<FTankMovementCommand> Batch;
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			Batch.Add(MakeCommand(SequenceNumber++, DeltaTime, Forward));
+		}
+		Commands->ReceiveCommands(*Controller, Tank, Batch);
+	};
+
+	TestTrue(TEXT("New player starts with a full budget"),
+		FMath::IsNearlyEqual(Commands->GetTimeBudget(*Controller), UTankCommandSubsystem::MaxTimeBudgetSeconds));
+	// 5 x 0.05 s spends the whole 0.25 s budget at 500 cm/s.
+	SendForward(5, 0.05f);
+	TestTrue(TEXT("Budget covers honest command time"), Tank->GetActorLocation().Equals(FVector(125.0, 0.0, 100.0), 0.01));
+	TestTrue(TEXT("Spent time leaves the budget"), FMath::IsNearlyZero(Commands->GetTimeBudget(*Controller), 1.e-6));
+
+	SendForward(1, 0.05f);
+	TestTrue(TEXT("Command without budget does not move the tank"), Tank->GetActorLocation().Equals(FVector(125.0, 0.0, 100.0), 0.01));
+	TestEqual(TEXT("Command without budget is still processed so it gets acknowledged"),
+		Commands->GetLastProcessedSequence(*Controller), SequenceNumber - 1);
+	const FTankCommandRingBuffer* History = Commands->FindCommandHistory(*Controller);
+	TestTrue(TEXT("History records the time the command was actually given"),
+		History && History->Num() > 0 && FMath::IsNearlyZero((*History)[History->Num() - 1].DeltaTime, 1.e-6f));
+
+	Commands->Tick(0.02f);
+	SendForward(1, 0.05f);
+	TestTrue(TEXT("Command is clamped to the remaining budget"), Tank->GetActorLocation().Equals(FVector(135.0, 0.0, 100.0), 0.01));
+
+	Commands->Tick(10.f);
+	TestTrue(TEXT("Budget cannot be saved up beyond its cap"),
+		FMath::IsNearlyEqual(Commands->GetTimeBudget(*Controller), UTankCommandSubsystem::MaxTimeBudgetSeconds));
+
+	// A 2x speed hack claims 0.1 s of commands for every 0.05 s of server time. Over 0.5 s of server time
+	// it claims 1 s, but only gets the 0.25 s cap plus the real 0.5 s minus the 0.05 s lost to the cap on
+	// the first refill, which is 0.7 s or 350 cm.
+	const FVector HackStart = Tank->GetActorLocation();
+	for (int32 Round = 0; Round < 10; ++Round)
+	{
+		Commands->Tick(0.05f);
+		SendForward(2, 0.05f);
+	}
+	TestTrue(TEXT("Speed hack gains no more than the budget cap"),
+		FMath::IsNearlyEqual(FVector::Dist(HackStart, Tank->GetActorLocation()), 350.0, 0.1));
+
+	Commands->Tick(10.f);
+	const FVector HonestStart = Tank->GetActorLocation();
+	for (int32 Round = 0; Round < 10; ++Round)
+	{
+		Commands->Tick(0.05f);
+		SendForward(3, 1.f / 60.f);
+	}
+	TestTrue(TEXT("Honest client is never clamped"),
+		FMath::IsNearlyEqual(FVector::Dist(HonestStart, Tank->GetActorLocation()), 250.0, 0.1));
 	return true;
 }
 
